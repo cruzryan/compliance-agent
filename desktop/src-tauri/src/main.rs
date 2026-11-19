@@ -109,7 +109,7 @@ fn checker_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .resource_dir()
         .map(|dir| dir.join(bundled_name))
-        .map_err(|_| "Device Checker's files are missing. Reinstall Device Checker.".to_string())
+        .map_err(|_| "Compliance Agent's files are missing. Reinstall Compliance Agent.".to_string())
 }
 
 fn run_collector(app: &AppHandle, which: Collector, extra: &[String]) -> Result<Output, String> {
@@ -120,7 +120,7 @@ fn run_collector(app: &AppHandle, which: Collector, extra: &[String]) -> Result<
     command.creation_flags(CREATE_NO_WINDOW);
     command
         .output()
-        .map_err(|error| short_error(format!("Could not start Device Checker: {error}").as_bytes()))
+        .map_err(|error| short_error(format!("Could not start Compliance Agent: {error}").as_bytes()))
 }
 
 /// A short, printable-ASCII message for the UI. Collector errors are our own
@@ -136,7 +136,7 @@ fn short_error(bytes: &[u8]) -> String {
         .collect();
     let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     if cleaned.is_empty() {
-        "Device Checker stopped without a message.".into()
+        "Compliance Agent stopped without a message.".into()
     } else {
         cleaned
     }
@@ -182,7 +182,7 @@ fn read_connection(app: &AppHandle) -> Result<Connection, String> {
     if !output.status.success() {
         return Err(failure_message(&output));
     }
-    serde_json::from_slice(&output.stdout).map_err(|_| "Device Checker returned an unreadable connection status.".to_string())
+    serde_json::from_slice(&output.stdout).map_err(|_| "Compliance Agent returned an unreadable connection status.".to_string())
 }
 
 fn gate(app: &AppHandle) -> std::sync::MutexGuard<'_, ()> {
@@ -221,7 +221,7 @@ async fn check_now(app: AppHandle) -> Result<Value, String> {
         }
         let report = parse_json(&output.stdout)
             .filter(Value::is_object)
-            .ok_or_else(|| "Device Checker returned an unreadable result.".to_string())?;
+            .ok_or_else(|| "Compliance Agent returned an unreadable result.".to_string())?;
         let checked_at = report
             .get("collected_at")
             .and_then(Value::as_str)
@@ -240,7 +240,7 @@ async fn last_report(app: AppHandle) -> Result<Value, String> {
         if !output.status.success() {
             return Err(failure_message(&output));
         }
-        parse_json(&output.stdout).ok_or_else(|| "Device Checker returned an unreadable last report.".to_string())
+        parse_json(&output.stdout).ok_or_else(|| "Compliance Agent returned an unreadable last report.".to_string())
     })
     .await
 }
@@ -252,7 +252,7 @@ async fn diagnose(app: AppHandle) -> Result<Value, String> {
         if !output.status.success() {
             return Err(failure_message(&output));
         }
-        let mut value = parse_json(&output.stdout).ok_or_else(|| "Device Checker returned unreadable diagnostics.".to_string())?;
+        let mut value = parse_json(&output.stdout).ok_or_else(|| "Compliance Agent returned unreadable diagnostics.".to_string())?;
         scrub(&mut value);
         Ok(value)
     })
@@ -265,12 +265,12 @@ async fn connection_status(app: AppHandle) -> Result<Connection, String> {
 }
 
 #[tauri::command]
-async fn connect_hackzero(app: AppHandle) -> Result<Connection, String> {
+async fn connect_device(app: AppHandle) -> Result<Connection, String> {
     // Browser login stays in the default browser. The app waits only for the
     // loopback callback, then receives a one-use code and no browser session.
     blocking(move || {
         let _guard = gate(&app);
-        let server = std::env::var("HACKZERO_SERVER").unwrap_or_else(|_| "https://dashboard.hackzero.ai".into());
+        let server = std::env::var("HACKZERO_SERVER").unwrap_or_else(|_| "https://app.complianceeverywhere.com".into());
         let output = run_collector(&app, Collector::Pair, &["--server".to_string(), server])?;
         if !output.status.success() {
             return Err(failure_message(&output));
@@ -289,13 +289,123 @@ fn disconnect(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn disconnect_hackzero(app: AppHandle) -> Result<Connection, String> {
+async fn disconnect_device(app: AppHandle) -> Result<Connection, String> {
     blocking(move || {
         let _guard = gate(&app);
         disconnect(&app)?;
         Ok(Connection { paired: false, workspace_name: None, person_name: None })
     })
     .await
+}
+
+/// The sign-in task on Windows. The app needs administrator rights, and
+/// Windows silently skips such apps in the per-user Run key, so a scheduled
+/// task with the highest run level starts it instead, without a prompt.
+#[cfg(target_os = "windows")]
+const SIGN_IN_TASK: &str = "Compliance Agent";
+
+#[cfg(target_os = "windows")]
+fn xml_text(value: &str) -> String {
+    value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+#[cfg(target_os = "windows")]
+fn schtasks(args: &[&str]) -> Result<(), String> {
+    let output = Command::new("schtasks.exe")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|error| short_error(error.to_string().as_bytes()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(failure_message(&output))
+    }
+}
+
+/// Creates or refreshes the sign-in task for the signed-in person. It runs on
+/// every launch, so a first install and every update both leave it pointing
+/// at the installed app. No time limit and no battery rule: the task's
+/// defaults would stop the checker after three days or keep it off on battery.
+#[cfg(target_os = "windows")]
+fn start_at_sign_in(app: &AppHandle) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|error| short_error(error.to_string().as_bytes()))?;
+    let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
+        (Ok(domain), Ok(name)) if !domain.is_empty() && !name.is_empty() => format!("{domain}\\{name}"),
+        _ => return Err("Could not read the signed-in account.".into()),
+    };
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Starts Compliance Agent when you sign in.</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>{exe}</Command><Arguments>--background</Arguments></Exec></Actions>
+</Task>
+"#,
+        user = xml_text(&user),
+        exe = xml_text(&exe.display().to_string()),
+    );
+    // schtasks reads UTF-16 with a byte-order mark.
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend(xml.encode_utf16().flat_map(u16::to_le_bytes));
+    let file = std::env::temp_dir().join(format!("compliance-agent-sign-in-{}.xml", std::process::id()));
+    std::fs::write(&file, bytes).map_err(|error| short_error(error.to_string().as_bytes()))?;
+    let created = schtasks(&["/Create", "/TN", SIGN_IN_TASK, "/XML", &file.display().to_string(), "/F"]);
+    let _ = std::fs::remove_file(&file);
+    created?;
+    remove_legacy_sign_in_entries(app);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn start_at_sign_in(app: &AppHandle) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().enable().map_err(|error| short_error(error.to_string().as_bytes()))?;
+    remove_legacy_sign_in_entries(app);
+    Ok(())
+}
+
+/// The name this app was installed under before it became Compliance
+/// Everywhere. Its sign-in entries are removed so the app never starts twice.
+const LEGACY_APP_NAME: &str = "HackZero Device Checker";
+
+/// Windows: the per-user Run-key entries, which never worked for an
+/// administrator app. macOS and Linux: the entry written under the old name.
+fn remove_legacy_sign_in_entries(app: &AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let _ = app.autolaunch().disable();
+        let _ = Command::new("reg.exe")
+            .args(["delete", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", LEGACY_APP_NAME, "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(home) = app.path().home_dir() {
+        let _ = std::fs::remove_file(home.join("Library/LaunchAgents").join(format!("{LEGACY_APP_NAME}.plist")));
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(config) = app.path().config_dir() {
+        let _ = std::fs::remove_file(config.join("autostart").join(format!("{LEGACY_APP_NAME}.desktop")));
+    }
+}
+
+fn stop_starting_at_sign_in(app: &AppHandle) {
+    #[cfg(target_os = "windows")]
+    let _ = schtasks(&["/Delete", "/TN", SIGN_IN_TASK, "/F"]);
+    use tauri_plugin_autostart::ManagerExt;
+    let _ = app.autolaunch().disable();
+    remove_legacy_sign_in_entries(app);
 }
 
 #[derive(Serialize)]
@@ -305,14 +415,18 @@ struct Uninstall {
     local_data_path: Option<String>,
 }
 
-/// The collector's state directory: `os.UserConfigDir()/HackZero/DeviceChecker`.
+/// The collector's state directories under `os.UserConfigDir()`: the current
+/// one first, then the one used before the app was renamed (the collector
+/// moves it on first run, but it stays where it is if that move failed).
 /// Tauri's config_dir is the same base on every platform.
-fn state_dir(app: &AppHandle) -> Option<PathBuf> {
-    let base = app.path().config_dir().ok()?;
-    if !base.is_absolute() {
-        return None;
+fn state_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    match app.path().config_dir() {
+        Ok(base) if base.is_absolute() => vec![
+            base.join("ComplianceEverywhere").join("ComplianceAgent"),
+            base.join("HackZero").join("DeviceChecker"),
+        ],
+        _ => Vec::new(),
     }
-    Some(base.join("HackZero").join("DeviceChecker"))
 }
 
 fn remove_state_dir(dir: &PathBuf) -> bool {
@@ -325,7 +439,7 @@ fn remove_state_dir(dir: &PathBuf) -> bool {
     }
 }
 
-/// Disconnect (revokes this device with HackZero and deletes its identity),
+/// Disconnect (revokes this device with Compliance Everywhere and deletes its identity),
 /// stop starting at login, and delete the app's local state directory. The
 /// app bundle itself is removed by the person (see the platform steps in UI).
 #[tauri::command]
@@ -333,16 +447,14 @@ async fn uninstall_device_checker(app: AppHandle) -> Result<Uninstall, String> {
     blocking(move || {
         let _guard = gate(&app);
         disconnect(&app)?;
-        {
-            use tauri_plugin_autostart::ManagerExt;
-            let _ = app.autolaunch().disable();
-        }
-        let dir = state_dir(&app);
-        let removed = dir.as_ref().map(remove_state_dir).unwrap_or(false);
+        stop_starting_at_sign_in(&app);
+        let dirs = state_dirs(&app);
+        // Try every directory; one that cannot be removed is shown to the person.
+        let left_behind: Vec<&PathBuf> = dirs.iter().filter(|dir| !remove_state_dir(dir)).collect();
         Ok(Uninstall {
             platform: std::env::consts::OS,
-            local_data_removed: removed,
-            local_data_path: if removed { None } else { dir.map(|d| d.display().to_string()) },
+            local_data_removed: !dirs.is_empty() && left_behind.is_empty(),
+            local_data_path: left_behind.first().map(|dir| dir.display().to_string()),
         })
     })
     .await
@@ -350,11 +462,13 @@ async fn uninstall_device_checker(app: AppHandle) -> Result<Uninstall, String> {
 
 #[cfg(target_os = "macos")]
 fn app_bundle_path() -> PathBuf {
-    let installed = PathBuf::from("/Applications/HackZero Device Checker.app");
+    let installed = PathBuf::from("/Applications/Compliance Agent.app");
     if installed.exists() {
         return installed;
     }
-    // .../HackZero Device Checker.app/Contents/MacOS/<binary>
+    // An install that updated itself in place keeps the bundle name it was
+    // first installed with, so the running bundle is the next best answer.
+    // .../<name>.app/Contents/MacOS/<binary>
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.ancestors().nth(3).map(PathBuf::from))
@@ -387,6 +501,13 @@ fn open_uninstall_location(app: AppHandle) -> Result<(), String> {
         let _ = &app;
         Ok(())
     }
+}
+
+/// True for an installed release. A development build never installs an
+/// update over the installed app.
+#[tauri::command]
+fn installed_build() -> bool {
+    !cfg!(debug_assertions)
 }
 
 #[tauri::command]
@@ -468,14 +589,14 @@ fn main() {
                 app.handle().exit(1);
                 return Ok(());
             }
-            let show = MenuItem::with_id(app, "show", "Open Device Checker", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "Open Compliance Agent", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
             TrayIconBuilder::new()
                 // An explicit icon is required: without it Windows can create
                 // an empty/invisible tray entry during development.
                 .icon(app.default_window_icon().expect("application icon is bundled").clone())
-                .tooltip("HackZero Device Checker")
+                .tooltip("Compliance Agent")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
@@ -487,6 +608,16 @@ fn main() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
                 }
+            }
+            // Installed builds only: a development build must never register
+            // itself to start at sign-in.
+            if !cfg!(debug_assertions) {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    if let Err(error) = start_at_sign_in(&handle) {
+                        eprintln!("Compliance Agent could not set itself to start at sign-in: {error}");
+                    }
+                });
             }
             let handle = app.handle().clone();
             std::thread::spawn(move || background_loop(handle));
@@ -503,10 +634,11 @@ fn main() {
             last_report,
             diagnose,
             connection_status,
-            connect_hackzero,
-            disconnect_hackzero,
+            connect_device,
+            disconnect_device,
             uninstall_device_checker,
             open_uninstall_location,
+            installed_build,
             quit_app
         ])
         .run(tauri::generate_context!())

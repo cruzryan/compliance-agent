@@ -13,7 +13,7 @@ import (
 const LockStaleAfter = 2 * time.Minute
 
 // ErrBusy means another collector run holds the lock.
-var ErrBusy = errors.New("another Device Checker run is in progress")
+var ErrBusy = errors.New("another Compliance Agent run is in progress")
 
 // AcquireLock makes only one collector run at a time. It creates path with
 // O_EXCL, waiting up to wait for a running holder, and replaces a lock older

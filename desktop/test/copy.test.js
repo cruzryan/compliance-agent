@@ -269,7 +269,7 @@ test("an unrecognized status on a required signal never reads verified and block
   assert.equal(row.state, "unknown");
   assert.equal(row.pill, "Couldn't check");
   assert.equal(summary.tone, "verify");
-  assert.deepEqual(texts(row), ["Device Checker sent a result this app doesn't recognize. Update Device Checker, then check again."]);
+  assert.deepEqual(texts(row), ["Compliance Agent sent a result this app doesn't recognize. Update Compliance Agent, then check again."]);
   assert.ok(!texts(row).join(" ").toLowerCase().includes("verified"));
   assert.ok(row.lines.length > 0);
 });
@@ -336,10 +336,10 @@ test("the headline agrees with a failing server verdict", () => {
 
 test("delivery copy", () => {
   const formatTime = () => "3:47 PM";
-  assert.deepEqual(describeDelivery({ delivery: "uploaded", checked_at: "2026-09-23T15:47:00Z" }, { formatTime }), { tone: "ok", text: "Sent to HackZero at 3:47 PM" });
-  assert.equal(describeDelivery({ delivery: "queued" }).text, "Couldn't reach HackZero. It will retry automatically.");
-  assert.equal(describeDelivery({ delivery: "rejected", http_status: 401 }).text, "HackZero didn't accept this report (401). This computer may no longer be connected.");
-  assert.match(describeDelivery({ delivery: "rejected", http_status: 400 }).text, /^HackZero didn't accept this report \(400\)\./);
+  assert.deepEqual(describeDelivery({ delivery: "uploaded", checked_at: "2026-09-23T15:47:00Z" }, { formatTime }), { tone: "ok", text: "Sent to Compliance Everywhere at 3:47 PM" });
+  assert.equal(describeDelivery({ delivery: "queued" }).text, "Couldn't reach Compliance Everywhere. It will retry automatically.");
+  assert.equal(describeDelivery({ delivery: "rejected", http_status: 401 }).text, "Compliance Everywhere didn't accept this report (401). This computer may no longer be connected.");
+  assert.match(describeDelivery({ delivery: "rejected", http_status: 400 }).text, /^Compliance Everywhere didn't accept this report \(400\)\./);
   assert.equal(describeDelivery({ delivery: "not_sent" }).tone, "info");
 });
 

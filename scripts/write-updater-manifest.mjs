@@ -11,10 +11,10 @@ if (!releaseRoot || !tag || !repository || !tag.startsWith("desktop-v")) {
 // The macOS app is universal: Apple silicon and Intel Macs update from the
 // same signed .app.tar.gz, so both updater targets point at it.
 const assets = {
-  "windows-x86_64": ["desktop-windows", "HackZero-Device-Checker-windows-amd64.msi"],
-  "darwin-aarch64": ["desktop-macos", "HackZero-Device-Checker-macos-universal.app.tar.gz"],
-  "darwin-x86_64": ["desktop-macos", "HackZero-Device-Checker-macos-universal.app.tar.gz"],
-  "linux-x86_64": ["desktop-debian", "hackzero-device-checker-linux-amd64.AppImage"],
+  "windows-x86_64": ["desktop-windows", "Compliance-Agent-windows-amd64.msi"],
+  "darwin-aarch64": ["desktop-macos", "Compliance-Agent-macos-universal.app.tar.gz"],
+  "darwin-x86_64": ["desktop-macos", "Compliance-Agent-macos-universal.app.tar.gz"],
+  "linux-x86_64": ["desktop-debian", "compliance-agent-linux-amd64.AppImage"],
 };
 const platforms = {};
 for (const [target, [directory, filename]] of Object.entries(assets)) {
@@ -28,7 +28,7 @@ for (const [target, [directory, filename]] of Object.entries(assets)) {
 
 await writeFile(join(releaseRoot, "latest.json"), `${JSON.stringify({
   version: tag.slice("desktop-v".length),
-  notes: "Signed Device Checker update.",
+  notes: "Signed Compliance Agent update.",
   pub_date: new Date().toISOString(),
   platforms,
 }, null, 2)}\n`);

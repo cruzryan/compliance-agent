@@ -48,15 +48,21 @@ jobs:
           npx tauri build --bundles msi
           New-Item -ItemType Directory -Force -Path ../dist | Out-Null
           $installer = Get-ChildItem src-tauri/target/release/bundle/msi/*.msi | Select-Object -First 1
+          Copy-Item $installer.FullName ../dist/Compliance-Agent-windows-amd64.msi
+          Copy-Item "$($installer.FullName).sig" ../dist/Compliance-Agent-windows-amd64.msi.sig
+          # Download links made before the rename use the original name. Publish
+          # the same installer under it too until every link has moved.
           Copy-Item $installer.FullName ../dist/HackZero-Device-Checker-windows-amd64.msi
-          Copy-Item "$($installer.FullName).sig" ../dist/HackZero-Device-Checker-windows-amd64.msi.sig
       - uses: anchore/sbom-action@v0
-        with: { path: ., format: spdx-json, output-file: dist/HackZero-Device-Checker-windows-amd64.spdx.json, upload-artifact: false, upload-release-assets: false }
+        with: { path: ., format: spdx-json, output-file: dist/Compliance-Agent-windows-amd64.spdx.json, upload-artifact: false, upload-release-assets: false }
       - name: Hash and attest
         shell: pwsh
         run: Get-ChildItem dist -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content dist/SHA256SUMS-windows-amd64.txt
       - uses: actions/attest-build-provenance@v2
-        with: { subject-path: dist/HackZero-Device-Checker-windows-amd64.msi }
+        with:
+          subject-path: |
+            dist/Compliance-Agent-windows-amd64.msi
+            dist/HackZero-Device-Checker-windows-amd64.msi
       - uses: actions/upload-artifact@v4
         with: { name: desktop-windows, path: dist/, if-no-files-found: error }
 
@@ -91,23 +97,26 @@ jobs:
           VERSION="$version" node -e 'const fs=require("fs");const p="src-tauri/tauri.conf.json";const c=JSON.parse(fs.readFileSync(p));c.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(c,null,2))'
           npx tauri build --target universal-apple-darwin --bundles app
           bundle_dir="src-tauri/target/universal-apple-darwin/release/bundle/macos"
-          app="$bundle_dir/HackZero Device Checker.app"
+          app="$bundle_dir/Compliance Agent.app"
           lipo "$app/Contents/Resources/device-checker-macos-universal" -verify_arch arm64 x86_64
           mkdir -p ../dist
-          pkgbuild --component "$app" --install-location /Applications ../dist/HackZero-Device-Checker-macos-universal.pkg
-          # The website links the arm64 name. Publish the same universal package
-          # under it too so existing links keep working on every Mac.
-          cp ../dist/HackZero-Device-Checker-macos-universal.pkg ../dist/HackZero-Device-Checker-macos-arm64.pkg
+          pkgbuild --component "$app" --install-location /Applications ../dist/Compliance-Agent-macos-universal.pkg
+          # Download links made before the rename use the original names (the
+          # website linked the arm64 one). Publish the same universal package
+          # under them too until every link has moved.
+          cp ../dist/Compliance-Agent-macos-universal.pkg ../dist/HackZero-Device-Checker-macos-universal.pkg
+          cp ../dist/Compliance-Agent-macos-universal.pkg ../dist/HackZero-Device-Checker-macos-arm64.pkg
           updater="$(find "$bundle_dir" -name '*.app.tar.gz' -type f | head -n 1)"
           test -n "$updater"
-          cp "$updater" ../dist/HackZero-Device-Checker-macos-universal.app.tar.gz
-          cp "$updater.sig" ../dist/HackZero-Device-Checker-macos-universal.app.tar.gz.sig
+          cp "$updater" ../dist/Compliance-Agent-macos-universal.app.tar.gz
+          cp "$updater.sig" ../dist/Compliance-Agent-macos-universal.app.tar.gz.sig
       - uses: anchore/sbom-action@v0
-        with: { path: ., format: spdx-json, output-file: dist/HackZero-Device-Checker-macos-universal.spdx.json, upload-artifact: false, upload-release-assets: false }
+        with: { path: ., format: spdx-json, output-file: dist/Compliance-Agent-macos-universal.spdx.json, upload-artifact: false, upload-release-assets: false }
       - run: cd dist && shasum -a 256 * > SHA256SUMS-macos-universal.txt
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
+            dist/Compliance-Agent-macos-universal.pkg
             dist/HackZero-Device-Checker-macos-universal.pkg
             dist/HackZero-Device-Checker-macos-arm64.pkg
       - uses: actions/upload-artifact@v4
@@ -138,15 +147,22 @@ jobs:
           VERSION="$version" node -e 'const fs=require("fs");const p="src-tauri/tauri.conf.json";const c=JSON.parse(fs.readFileSync(p));c.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(c,null,2))'
           npx tauri build --bundles deb,appimage
           mkdir -p ../dist
-          cp src-tauri/target/release/bundle/deb/*.deb ../dist/hackzero-device-checker-linux-amd64.deb
+          cp src-tauri/target/release/bundle/deb/*.deb ../dist/compliance-agent-linux-amd64.deb
           updater="$(find src-tauri/target/release/bundle/appimage -name '*.AppImage' -type f | head -n 1)"
-          cp "$updater" ../dist/hackzero-device-checker-linux-amd64.AppImage
-          cp "$updater.sig" ../dist/hackzero-device-checker-linux-amd64.AppImage.sig
+          cp "$updater" ../dist/compliance-agent-linux-amd64.AppImage
+          cp "$updater.sig" ../dist/compliance-agent-linux-amd64.AppImage.sig
+          # Download links made before the rename use the original names.
+          # Publish the same packages under them too until every link has moved.
+          cp ../dist/compliance-agent-linux-amd64.deb ../dist/hackzero-device-checker-linux-amd64.deb
+          cp ../dist/compliance-agent-linux-amd64.AppImage ../dist/hackzero-device-checker-linux-amd64.AppImage
       - uses: anchore/sbom-action@v0
-        with: { path: ., format: spdx-json, output-file: dist/hackzero-device-checker-linux-amd64.spdx.json, upload-artifact: false, upload-release-assets: false }
+        with: { path: ., format: spdx-json, output-file: dist/compliance-agent-linux-amd64.spdx.json, upload-artifact: false, upload-release-assets: false }
       - run: cd dist && sha256sum * > SHA256SUMS-linux-amd64.txt
       - uses: actions/attest-build-provenance@v2
-        with: { subject-path: dist/hackzero-device-checker-linux-amd64.deb }
+        with:
+          subject-path: |
+            dist/compliance-agent-linux-amd64.deb
+            dist/hackzero-device-checker-linux-amd64.deb
       - uses: actions/upload-artifact@v4
         with: { name: desktop-debian, path: dist/, if-no-files-found: error }
 
@@ -168,5 +184,5 @@ jobs:
             Desktop packages are built from this public immutable tag. Verify a downloaded package with:
             `gh attestation verify PATH_TO_PACKAGE -R ${{ github.repository }}`
 
-            Compare its SHA-256 value to `SHA256SUMS.txt`. The macOS package is universal (Apple silicon and Intel); `HackZero-Device-Checker-macos-arm64.pkg` is the same package under its original name. This workflow creates provenance, not a claim of Windows code signing or Apple notarization.
+            Compare its SHA-256 value to `SHA256SUMS.txt`. The macOS package is universal (Apple silicon and Intel). Files named `HackZero-Device-Checker-*` and `hackzero-device-checker-*` are the same packages under their original names. This workflow creates provenance, not a claim of Windows code signing or Apple notarization.
           files: release/**/*

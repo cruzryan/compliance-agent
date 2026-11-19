@@ -183,19 +183,19 @@ func Classify(result SendResult, err error) (delivery string, message string) {
 	case err == nil:
 		return DeliveryUploaded, ""
 	case status == 0:
-		return DeliveryQueued, "Could not reach HackZero. The report is saved on this computer and will be sent automatically."
+		return DeliveryQueued, "Could not reach Compliance Everywhere. The report is saved on this computer and will be sent automatically."
 	case status >= 500 || status == 429:
-		return DeliveryQueued, fmt.Sprintf("HackZero is temporarily unavailable (HTTP %d). The report is saved on this computer and will be sent automatically.", status)
+		return DeliveryQueued, fmt.Sprintf("Compliance Everywhere is temporarily unavailable (HTTP %d). The report is saved on this computer and will be sent automatically.", status)
 	case status == 401 || status == 404 || status == 410:
-		return DeliveryRejected, fmt.Sprintf("This computer is no longer connected to HackZero (HTTP %d). Connect it again to keep reporting.", status)
+		return DeliveryRejected, fmt.Sprintf("This computer is no longer connected to Compliance Everywhere (HTTP %d). Connect it again to keep reporting.", status)
 	case status >= 400 && status < 500:
 		detail := ""
 		if code := posture.SanitizeToken(result.ErrorCode); code != "" {
 			detail = ": " + code
 		}
-		return DeliveryRejected, fmt.Sprintf("HackZero rejected the report (HTTP %d%s).", status, detail)
+		return DeliveryRejected, fmt.Sprintf("Compliance Everywhere rejected the report (HTTP %d%s).", status, detail)
 	default:
-		return DeliveryQueued, fmt.Sprintf("Unexpected response from HackZero (HTTP %d). The report is saved and will be sent again.", status)
+		return DeliveryQueued, fmt.Sprintf("Unexpected response from Compliance Everywhere (HTTP %d). The report is saved and will be sent again.", status)
 	}
 }
 

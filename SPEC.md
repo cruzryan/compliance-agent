@@ -1,10 +1,10 @@
-# HackZero Device Checker
+# Compliance Agent
 
 ## Product decision
 
-HackZero Device Checker is a small, open-source, read-only laptop security checker. It is not an MDM.
+Compliance Agent is a small, open-source, read-only laptop security checker. It is not an MDM.
 
-It runs in the background on a work laptop, checks a narrow set of security settings, and sends a signed result to HackZero. Its job is to create trustworthy, continuous evidence for SOC 2 without asking a person to repeatedly upload screenshots.
+It runs in the background on a work laptop, checks a narrow set of security settings, and sends a signed result to Compliance Everywhere. Its job is to create trustworthy, continuous evidence for SOC 2 without asking a person to repeatedly upload screenshots.
 
 Supported in the first release:
 
@@ -32,11 +32,11 @@ The checker does **not** satisfy AC-13 Device return and wipe. It can identify t
 | Check | macOS | Windows 11 | Ubuntu / Debian |
 | --- | --- | --- | --- |
 | Disk encryption | FileVault enabled | BitLocker enabled | LUKS enabled |
-| Screen lock | Automatic lock with password required on return, within the HackZero policy limit | Equivalent Windows lock/password policy | Equivalent supported desktop lock policy |
+| Screen lock | Automatic lock with password required on return, within the Compliance Everywhere policy limit | Equivalent Windows lock/password policy | Equivalent supported desktop lock policy |
 | Automatic OS updates | macOS automatic updates enabled | Windows Update automatic updates enabled | Unattended security updates enabled |
 | Malware protection | Gatekeeper enabled and XProtect data updates on | Microsoft Defender real-time protection on, or another antivirus on | Supported malware-protection service active |
 
-The default HackZero screen-lock limit is 15 minutes. A customer can only change that limit through their documented security policy; it is not a per-device toggle.
+The default Compliance Everywhere screen-lock limit is 15 minutes. A customer can only change that limit through their documented security policy; it is not a per-device toggle.
 
 These four are the only things the checker checks and shows. It does not
 report whether updates are waiting to install, and it does not warn about the
@@ -199,12 +199,12 @@ Device records support multiple devices per person, reassignment history, BYOD, 
 
 Every device has a stable device identifier and one primary evidence source:
 
-- HackZero Device Checker
+- Compliance Agent
 - Kandji
 - Jamf
 - Intune
 
-If two fresh sources disagree, HackZero shows a conflict and requires attention. A fresh explicit failure always wins over a passing result. The same laptop must never count twice.
+If two fresh sources disagree, Compliance Everywhere shows a conflict and requires attention. A fresh explicit failure always wins over a passing result. The same laptop must never count twice.
 
 ## Installation and pairing
 
@@ -220,12 +220,12 @@ The normal operating-system administrator confirmation happens once during insta
 
 ### Pairing
 
-1. An admin or user selects **Install HackZero Device Checker** from HackZero.
+1. An admin or user selects **Install Compliance Agent** from Compliance Everywhere.
 2. They download the platform-appropriate package.
 3. The installer starts the checker service.
 4. The checker opens the default browser once.
-5. The person signs into HackZero normally.
-6. HackZero displays the device name and asks to pair it to the matching People record.
+5. The person signs into Compliance Everywhere normally.
+6. Compliance Everywhere displays the device name and asks to pair it to the matching People record.
 7. The browser automatically returns a one-time result to the checker.
 8. The checker receives a narrow device credential and begins reporting.
 
@@ -233,9 +233,9 @@ Pairing uses OAuth authorization code flow with PKCE. The checker opens a tempor
 
 There is no permanent local port, inbound internet connection, firewall exception, pasted long-lived token, or stored user-session token.
 
-The checker generates a device-specific keypair locally. HackZero stores its public key and accepts only reports signed by that device. The private key stays in the operating system's secure credential store.
+The checker generates a device-specific keypair locally. Compliance Everywhere stores its public key and accepts only reports signed by that device. The private key stays in the operating system's secure credential store.
 
-If the signed-in email has no matching People record, is out of scope, or has an ambiguous match, an admin assigns the device explicitly. HackZero never silently assigns it to the wrong person.
+If the signed-in email has no matching People record, is out of scope, or has an ambiguous match, an admin assigns the device explicitly. Compliance Everywhere never silently assigns it to the wrong person.
 
 ## Runtime and reporting
 
@@ -261,9 +261,9 @@ Reports use outbound HTTPS only. The product does not run a web server or listen
 | Not installed | An in-scope person has no checker-backed or valid manual device evidence. |
 | Needs renewal | Manual evidence is more than 90 days old. |
 
-Only a report with a failing field creates **Fail**. A laptop that was powered off does not fail a control. HackZero must never fabricate a daily passing result when no report was received.
+Only a report with a failing field creates **Fail**. A laptop that was powered off does not fail a control. Compliance Everywhere must never fabricate a daily passing result when no report was received.
 
-Use HackZero server receipt time for evidence freshness, not the laptop's clock.
+Use Compliance Everywhere server receipt time for evidence freshness, not the laptop's clock.
 
 Freshness thresholds:
 
@@ -280,10 +280,10 @@ Each report contains only:
 - device ID and serial/OS identity where available;
 - device name;
 - operating system and version;
-- assigned HackZero person ID;
+- assigned Compliance Everywhere person ID;
 - result/reason for the four checks;
 - agent version and rules version;
-- device-signed report timestamp and HackZero server receipt timestamp.
+- device-signed report timestamp and Compliance Everywhere server receipt timestamp.
 
 The checker never collects:
 
@@ -297,9 +297,9 @@ The checker never collects:
 - remote-shell access;
 - remote-control or wipe capability.
 
-## HackZero web UI
+## Compliance Everywhere web UI
 
-There is no new top-level Device Checker tab.
+There is no new top-level Compliance Agent tab.
 
 The operational view belongs in the existing People page. Device records exist internally, but appear within each expanded person card.
 
@@ -327,27 +327,27 @@ Malware protection XProtect and Gatekeeper active
 [ Check now ]  [ View device history ]
 ```
 
-Control pages for AC-11, AC-12, and OPS-04 link directly to the filtered People records that need action. They recommend Device Checker only where it provides the control's actual evidence.
+Control pages for AC-11, AC-12, and OPS-04 link directly to the filtered People records that need action. They recommend Compliance Agent only where it provides the control's actual evidence.
 
 ### System tray / menu bar
 
 The local app has a minimal native status surface:
 
 ```text
-HackZero Device Checker
+Compliance Agent
 Protected
 Last checked: 8 minutes ago
 
 [ Check now ]
-[ Open HackZero ]
+[ Open Compliance Everywhere ]
 [ What we read ]
 ```
 
 - Windows: system tray.
 - macOS: menu bar.
-- Ubuntu/Debian: tray icon where the desktop supports it; otherwise `hackzero-device status` and standard desktop notifications.
+- Ubuntu/Debian: tray icon where the desktop supports it; otherwise `device-checker status` and standard desktop notifications.
 
-All detailed UX remains web-based in HackZero. Do not build an Electron or Tauri desktop dashboard.
+All detailed UX remains web-based in Compliance Everywhere. Do not build an Electron or Tauri desktop dashboard.
 
 ## Remediation
 
@@ -380,16 +380,16 @@ The website shows the matched instructions in plain English and lets the user se
 
 ## Reminders
 
-At more than 30 hours without a full report, HackZero shows **Needs a fresh check** in the People UI.
+At more than 30 hours without a full report, Compliance Everywhere shows **Needs a fresh check** in the People UI.
 
-At 7 days without a full report, HackZero can email the person:
+At 7 days without a full report, Compliance Everywhere can email the person:
 
 ```text
-Subject: Your HackZero Device Checker needs attention
+Subject: Your Compliance Agent needs attention
 
 We have not received a recent security check from your work device.
 
-[ Download / reinstall HackZero Device Checker ]
+[ Download / reinstall Compliance Agent ]
 [ Get help ]
 ```
 
@@ -397,7 +397,7 @@ The email includes the device name, last successful check date, platform-appropr
 
 ## AC-13 departure flow
 
-When an active person receives a departure date, HackZero creates one linked offboarding workflow:
+When an active person receives a departure date, Compliance Everywhere creates one linked offboarding workflow:
 
 1. HR-05 records access removal from the systems approved at onboarding.
 2. AC-13 records what happened to each assigned device.
@@ -426,13 +426,13 @@ Provide one clear export for checker-backed evidence:
 - explicit failures and conflicts;
 - checker version and rules version.
 
-Update the SOC 2 control matrix so AC-11, AC-12, and OPS-04 explicitly accept the Device Checker's signed per-device report. Manual settings screenshots remain the fallback for companies that use neither an MDM nor Device Checker.
+Update the SOC 2 control matrix so AC-11, AC-12, and OPS-04 explicitly accept the Compliance Agent's signed per-device report. Manual settings screenshots remain the fallback for companies that use neither an MDM nor Compliance Agent.
 
 ## Public page and open source
 
-Public page: `https://hackzero.ai/device-checker`
+Public page: `https://complianceeverywhere.com/device-checker`
 
-The page should feel professional, vibrant, and confident while matching HackZero's visual language. It should not use a fake dashboard or product screenshot.
+The page should feel professional, vibrant, and confident while matching Compliance Everywhere's visual language. It should not use a fake dashboard or product screenshot.
 
 It includes:
 

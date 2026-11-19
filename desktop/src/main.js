@@ -4,7 +4,6 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { enable as enableAutostart } from "@tauri-apps/plugin-autostart";
 import {
   REQUIREMENTS,
   summarize,
@@ -53,6 +52,39 @@ let availableUpdate = null;
 let installingUpdate = false;
 let lastUpdateCheck = 0;
 
+// ------------------------------------------------------------------ fit to window
+
+// The connected view always fits the window: when its content is taller than
+// the window, the whole view is scaled down instead of scrolling. Below the
+// smallest readable scale it scrolls as a last resort.
+const MIN_FIT_SCALE = 0.5;
+let fitQueued = false;
+function fitToWindow() {
+  fitQueued = false;
+  shell.style.zoom = "";
+  shell.style.height = "";
+  if (shell.classList.contains("unpaired")) return;
+  let scale = 1;
+  // Scaling widens the layout, which changes the height; settle in a few passes.
+  for (let pass = 0; pass < 3; pass += 1) {
+    const needed = shell.scrollHeight * scale;
+    const available = window.innerHeight;
+    if (needed <= available + 1) break;
+    scale = Math.max(MIN_FIT_SCALE, scale * (available / needed));
+    shell.style.zoom = String(scale);
+    shell.style.height = `${100 / scale}vh`;
+    if (scale === MIN_FIT_SCALE) break;
+  }
+}
+function scheduleFit() {
+  if (fitQueued) return;
+  fitQueued = true;
+  window.requestAnimationFrame(fitToWindow);
+}
+window.addEventListener("resize", scheduleFit);
+new MutationObserver(scheduleFit).observe(shell, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["hidden", "class"] });
+document.fonts?.ready.then(scheduleFit);
+
 // ------------------------------------------------------------------ DOM helpers
 
 // Every string from the collector or server is inserted as text, never HTML.
@@ -82,46 +114,46 @@ function friendlyTime(date) {
 
 // ------------------------------------------------------------------ rendering
 
-const INDICATOR = { pass: "✓", fail: "!", unknown: "?", missing: "?" };
-
-function requirementPanel(key) {
+function requirementPanel(key, panelId) {
   const rules = REQUIREMENTS[key];
   if (!rules) return null;
-  const panelId = `requirements-${key}`;
-  const toggle = el("button", { className: "details-toggle", text: "What we check ", attrs: { type: "button", "data-details": panelId, "aria-expanded": "false", "aria-controls": panelId } }, [
-    el("span", { text: "?", attrs: { "aria-hidden": "true" } })
-  ]);
   const panel = el("div", { className: "requirements-panel", attrs: { id: panelId } }, [
     el("strong", { text: "To pass, this device must have:" }),
     el("ul", {}, rules.map((rule) => el("li", { text: rule })))
   ]);
   panel.hidden = true;
-  return [toggle, panel];
+  return panel;
 }
 
+// One row per setting: its name, its state in words, and what was read. A row
+// with requirements opens them when its title is clicked.
 function renderRow(row, platform) {
   const guide = row.state === "fail" ? remediation[platform]?.[row.key] : null;
   const lines = el("ul", { className: "detail-lines" }, row.lines.map((line) => el("li", { className: `line ${line.tone}`, text: line.text })));
   const result = el("div", { className: "result" }, [lines]);
   if (guide) {
-    result.append(el("button", { className: "fix-link", text: `How to fix this on ${platformName(platform)} →`, attrs: { type: "button", "data-remediation": row.key } }));
+    result.append(el("button", { className: "fix-link", text: `How to fix this on ${platformName(platform)}`, attrs: { type: "button", "data-remediation": row.key } }));
   }
-  const panel = requirementPanel(row.key);
-  if (panel) result.append(...panel);
-  return el("article", { className: `finding ${row.state}`, attrs: { "data-key": row.key } }, [
-    el("div", { className: "finding-title" }, [
-      el("span", { className: "indicator", text: INDICATOR[row.state] || "?", attrs: { "aria-hidden": "true" } }),
-      el("strong", { text: row.label }),
-      el("span", { className: "status-pill", text: row.pill })
-    ]),
-    result
-  ]);
+  const panelId = `requirements-${row.key}`;
+  const panel = requirementPanel(row.key, panelId);
+  const title = [el("strong", { text: row.label }), el("span", { className: "status-pill", text: row.pill })];
+  let head;
+  if (panel) {
+    result.append(panel);
+    head = el("button", { className: "finding-title", attrs: { type: "button", "data-details": panelId, "aria-expanded": "false", "aria-controls": panelId, title: "What we check" } }, [
+      ...title,
+      el("span", { className: "chevron", attrs: { "aria-hidden": "true" } })
+    ]);
+  } else {
+    head = el("div", { className: "finding-title" }, title);
+  }
+  return el("article", { className: `finding ${row.state}`, attrs: { "data-key": row.key } }, [head, result]);
 }
 
 function renderDashboard(server) {
   const target = $("#dashboardVerdict");
   target.replaceChildren();
-  if (!server || (!server.status && !server.problems.length && !server.warnings.length)) {
+  if (!server || (server.status !== "fail" && !server.problems.length && !server.warnings.length)) {
     target.hidden = true;
     return;
   }
@@ -129,7 +161,7 @@ function renderDashboard(server) {
   target.className = `dashboard-verdict ${server.status === "fail" || server.problems.length ? "fail" : server.warnings.length ? "warn" : "pass"}`;
   target.append(el("h2", { text: "What your dashboard shows" }));
   if (!server.problems.length && !server.warnings.length) {
-    target.append(el("p", { text: server.status === "fail" ? "Your dashboard shows this device as failing." : "Your dashboard shows this device as passing." }));
+    target.append(el("p", { text: "Your dashboard shows this device as failing." }));
     return;
   }
   const list = el("ul", { className: "detail-lines" });
@@ -151,14 +183,14 @@ function renderResult(result) {
   setTone(summary.tone);
   $("#headline").textContent = summary.headline;
   $("#description").textContent = summary.description;
-  $("#summaryStatus").textContent = summary.summaryStatus;
-  $("#summaryDetail").textContent = summary.summaryDetail;
   $("#checkedAt").textContent = formatCheckedAt(result);
   const delivery = describeDelivery(result, { formatTime: friendlyTime });
   const note = $("#deliveryNote");
   note.hidden = !delivery;
   note.className = `delivery-note ${delivery?.tone || ""}`;
   note.textContent = delivery?.text || "";
+  // A sent report already states its time; do not print the time twice.
+  $("#checkedAt").hidden = delivery?.tone === "ok";
   $("#posture").replaceChildren(...summary.rows.map((row) => renderRow(row, summary.platform)));
   renderDashboard(summary.server);
 }
@@ -171,13 +203,12 @@ function renderCheckFailure(message) {
   setTone("failed");
   $("#headline").textContent = "Could not check this device";
   $("#description").textContent = message;
-  $("#summaryStatus").textContent = "Check failed";
-  $("#summaryDetail").textContent = "No result to show";
   $("#checkedAt").textContent = `Check failed at ${timeOnly(new Date())}`;
+  $("#checkedAt").hidden = false;
   const note = $("#deliveryNote");
   note.hidden = false;
   note.className = "delivery-note fail";
-  note.textContent = "Nothing was sent to HackZero from this check. Try again in a moment.";
+  note.textContent = "Nothing was sent to Compliance Everywhere from this check. Try again in a moment.";
   $("#posture").replaceChildren();
   renderDashboard(null);
 }
@@ -185,10 +216,10 @@ function renderCheckFailure(message) {
 function renderConnection(value) {
   connection = value;
   shell.classList.toggle("unpaired", !value?.paired);
-  const action = $("#connectHackZero");
+  const action = $("#connectDevice");
   const title = $("#connectionTitle");
   const description = $("#connectionDescription");
-  const disconnect = $("#disconnectHackZero");
+  const disconnect = $("#disconnectDevice");
   const uninstall = $("#uninstallDeviceChecker");
   if (value?.paired) {
     const identity = clean(value.person_name, 80) || "Connected device";
@@ -200,9 +231,9 @@ function renderConnection(value) {
     disconnect.hidden = false;
     uninstall.hidden = false;
   } else {
-    action.replaceChildren("Connect device ", el("b", { text: "→" }));
+    action.replaceChildren("Connect device");
     action.disabled = false;
-    title.textContent = "Connect this device to HackZero";
+    title.textContent = "Connect this device to Compliance Everywhere";
     description.textContent = "Sign in to send this device's read-only posture record to your workspace.";
     disconnect.hidden = true;
     uninstall.hidden = true;
@@ -225,10 +256,10 @@ async function loadConnection() {
     renderConnection(await invoke("connection_status"));
     return true;
   } catch (error) {
-    console.error("Device Checker connection status failed", error);
+    console.error("Compliance Agent connection status failed", error);
     if (!connection) {
       renderConnection({ paired: false });
-      $("#connectionDescription").textContent = "We couldn't read whether this device is connected. Close and reopen Device Checker, or connect again.";
+      $("#connectionDescription").textContent = "We couldn't read whether this device is connected. Close and reopen Compliance Agent, or connect again.";
     }
     return false;
   }
@@ -238,24 +269,24 @@ async function refresh({ initial = false } = {}) {
   if (checkInFlight) return;
   checkInFlight = true;
   const button = $("#checkAgain");
-  if (initial) setLaunchState({ title: "Loading HackZero Device Checker", description: "This might take a moment." });
+  if (initial) setLaunchState({ title: "Loading Compliance Agent", description: "This might take a moment." });
   button.disabled = true;
   button.textContent = "Checking…";
   try {
     const result = await invoke("check_now");
     if (!result || typeof result !== "object" || typeof result.report !== "object" || result.report === null) {
-      throw new Error("Device Checker returned an unreadable result.");
+      throw new Error("Compliance Agent returned an unreadable result.");
     }
     lastFailureAt = 0;
     renderResult(result);
     if (initial) setLaunchState({ visible: false, title: "", description: "" });
   } catch (error) {
-    console.error("Device Checker check failed", error);
+    console.error("Compliance Agent check failed", error);
     renderCheckFailure(`We couldn't run the check: ${errorText(error)} Try again, or open Diagnostics.`);
     if (initial && !connection?.paired) {
       setLaunchState({
         title: "Something went wrong",
-        description: "We could not start the local device check. Try again, or close and reopen Device Checker.",
+        description: "We could not start the local device check. Try again, or close and reopen Compliance Agent.",
         failed: true
       });
     } else if (initial) {
@@ -284,7 +315,7 @@ async function reloadFromLast() {
     lastFailureAt = 0;
     renderResult(last);
   } catch (error) {
-    console.error("Device Checker could not load the last report", error);
+    console.error("Compliance Agent could not load the last report", error);
   }
 }
 
@@ -296,37 +327,61 @@ function scheduleReload() {
 
 // ------------------------------------------------------------------ updates
 
+// The install button exists only while a signed release is waiting.
+function syncInstallButton() {
+  const install = $("#installUpdate");
+  install.hidden = !availableUpdate;
+  if (availableUpdate && !installingUpdate) install.textContent = `Install v${clean(availableUpdate.version, 40)}`;
+}
+
 async function checkForUpdate({ quiet = false } = {}) {
   if (installingUpdate) return;
   const target = $("#updateState");
-  const install = $("#installUpdate");
+  const again = $("#checkUpdates");
   lastUpdateCheck = Date.now();
   if (!quiet) {
-    install.disabled = true;
-    install.textContent = "Checking for updates…";
-    target.textContent = "Checking for updates…";
+    again.disabled = true;
+    target.textContent = "Checking…";
   }
   try {
     const found = await check();
     if (installingUpdate) return;
     availableUpdate = found;
-    if (!found) {
-      target.textContent = "Up to date";
-      install.textContent = "Check for updates";
-      return;
-    }
-    target.textContent = `Version ${clean(found.version, 40)} is ready to install.`;
-    install.textContent = `Install v${clean(found.version, 40)}`;
+    target.textContent = found ? `Version ${clean(found.version, 40)} is ready` : "Up to date";
   } catch (error) {
     // An update-server outage is never a failed security setting.
-    console.error("Device Checker update check failed", error);
+    console.error("Compliance Agent update check failed", error);
     if (!quiet || !availableUpdate) {
       availableUpdate = null;
       target.textContent = "Update status unavailable";
-      install.textContent = "Check for updates";
     }
   } finally {
-    if (!installingUpdate) install.disabled = false;
+    again.disabled = false;
+    syncInstallButton();
+  }
+  if (availableUpdate && (await mayInstallUnattended(availableUpdate.version))) await updateAction();
+}
+
+// Updates install themselves on Windows, where the app already runs with
+// administrator rights and the installer needs no prompt. Other systems can
+// ask for a password, so there the person starts the install. A version is
+// tried unattended once a day at most: if its install fails, the next launch
+// must not close the app again.
+const UNATTENDED_KEY = "unattendedUpdate";
+const UNATTENDED_RETRY_AFTER = 24 * 60 * 60 * 1000;
+async function mayInstallUnattended(version) {
+  if (!navigator.userAgent.includes("Windows")) return false;
+  if (installingUpdate || checkInFlight || !connection?.paired || document.querySelector("dialog[open]")) return false;
+  try {
+    if (!(await invoke("installed_build"))) return false;
+    const last = JSON.parse(window.localStorage.getItem(UNATTENDED_KEY) || "null");
+    if (last && last.version === version && Date.now() - last.at < UNATTENDED_RETRY_AFTER) return false;
+    window.localStorage.setItem(UNATTENDED_KEY, JSON.stringify({ version, at: Date.now() }));
+    return true;
+  } catch (error) {
+    // Without a place to remember the attempt, leave the install to the person.
+    console.error("Compliance Agent could not prepare an unattended update", error);
+    return false;
   }
 }
 
@@ -345,10 +400,10 @@ async function updateAction() {
     install.textContent = "Restarting…";
     await relaunch();
   } catch (error) {
-    console.error("Device Checker update install failed", error);
+    console.error("Compliance Agent update install failed", error);
     installingUpdate = false;
     install.disabled = false;
-    install.textContent = `Install v${clean(availableUpdate.version, 40)}`;
+    install.textContent = `Try installing v${clean(availableUpdate.version, 40)} again`;
     $("#updateState").textContent = "The signed update could not be installed.";
   }
 }
@@ -473,7 +528,7 @@ function actionButton(text, onClick, className = "secondary-action") {
 
 function showUninstallConfirm(errorMessage) {
   const paragraphs = [
-    "This disconnects this computer from HackZero, stops Device Checker from starting when you sign in, and deletes its saved data on this computer.",
+    "This disconnects this computer from Compliance Everywhere, stops Compliance Agent from starting when you sign in, and deletes its saved data on this computer.",
     "Then we'll show you how to remove the app itself."
   ];
   if (errorMessage) paragraphs.push(el("p", { className: "modal-error", text: errorMessage }));
@@ -491,46 +546,46 @@ async function quitApp() {
   try {
     await invoke("quit_app");
   } catch (error) {
-    console.error("Device Checker could not quit", error);
+    console.error("Compliance Agent could not quit", error);
   }
 }
 
 function showUninstallDone(outcome) {
   const platform = outcome?.platform;
-  const paragraphs = ["This computer is disconnected and Device Checker will no longer start when you sign in."];
+  const paragraphs = ["This computer is disconnected and Compliance Agent will no longer start when you sign in."];
   if (outcome?.local_data_removed === false && outcome?.local_data_path) {
     paragraphs.push(el("p", { className: "modal-error", text: `Some saved files couldn't be removed. You can delete this folder: ${clean(outcome.local_data_path)}` }));
   }
   const actions = [];
   if (platform === "macos") {
-    paragraphs.push("To finish, drag HackZero Device Checker from Applications to the Trash.");
+    paragraphs.push("To finish, drag Compliance Agent from Applications to the Trash.");
     actions.push(actionButton("Quit", quitApp));
     actions.push(actionButton("Show in Finder and quit", async () => {
       try { await invoke("open_uninstall_location"); } catch (error) { console.error(error); }
       await quitApp();
     }, "check-action plain"));
   } else if (platform === "windows") {
-    paragraphs.push("To finish, open Settings > Apps > Installed apps, find HackZero Device Checker, and choose Uninstall.");
+    paragraphs.push("To finish, open Settings > Apps > Installed apps, find Compliance Agent, and choose Uninstall.");
     actions.push(actionButton("Quit", quitApp));
     actions.push(actionButton("Open Installed apps and quit", async () => {
       try { await invoke("open_uninstall_location"); } catch (error) { console.error(error); }
       await quitApp();
     }, "check-action plain"));
   } else {
-    paragraphs.push("To finish, remove HackZero Device Checker with your package manager (for example, Ubuntu Software or apt), or delete the AppImage file.");
+    paragraphs.push("To finish, remove Compliance Agent with your package manager (for example, Ubuntu Software or apt), or delete the AppImage file.");
     actions.push(actionButton("Quit", quitApp, "check-action plain"));
   }
   uninstallState({ title: "Almost done", paragraphs, actions, closable: false });
 }
 
 async function runUninstall() {
-  uninstallState({ title: "Disconnecting…", paragraphs: ["Removing this computer from HackZero. This takes a few seconds."], locked: true });
+  uninstallState({ title: "Disconnecting…", paragraphs: ["Removing this computer from Compliance Everywhere. This takes a few seconds."], locked: true });
   try {
     const outcome = await invoke("uninstall_device_checker");
     renderConnection({ paired: false });
     showUninstallDone(outcome);
   } catch (error) {
-    console.error("Device Checker uninstall failed", error);
+    console.error("Compliance Agent uninstall failed", error);
     $("#uninstallDialog").dataset.locked = "false";
     showUninstallConfirm(`We couldn't disconnect this computer: ${errorText(error)} Check your connection and try again. Nothing was removed.`);
   }
@@ -556,6 +611,29 @@ $("#posture").addEventListener("click", (event) => {
 });
 $("#launchRetry").addEventListener("click", () => refresh({ initial: true }));
 $("#installUpdate").addEventListener("click", updateAction);
+$("#checkUpdates").addEventListener("click", (event) => {
+  // Stay open so the result shows next to the item.
+  event.stopPropagation();
+  checkForUpdate();
+});
+
+// Options: one quiet menu for everything that is not the main action.
+function setOptionsOpen(open) {
+  $("#optionsMenu").hidden = !open;
+  $("#optionsScrim").hidden = !open;
+  $("#openOptions").setAttribute("aria-expanded", String(open));
+}
+$("#openOptions").addEventListener("click", (event) => {
+  event.stopPropagation();
+  setOptionsOpen($("#optionsMenu").hidden);
+});
+document.addEventListener("click", () => setOptionsOpen(false));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("#optionsMenu").hidden) {
+    setOptionsOpen(false);
+    $("#openOptions").focus();
+  }
+});
 $("#openDiagnostics").addEventListener("click", openDiagnostics);
 $("#copyDiagnostics").addEventListener("click", copyDiagnostics);
 $("#uninstallDeviceChecker").addEventListener("click", () => {
@@ -566,45 +644,39 @@ $("#uninstallClose").addEventListener("click", () => closeModal($("#uninstallDia
 wireModal($("#diagnosticsDialog"));
 wireModal($("#uninstallDialog"));
 
-$("#connectHackZero").addEventListener("click", async () => {
-  const button = $("#connectHackZero");
+$("#connectDevice").addEventListener("click", async () => {
+  const button = $("#connectDevice");
   const title = $("#connectionTitle");
   const description = $("#connectionDescription");
   button.disabled = true;
-  button.replaceChildren("Waiting for approval ", el("b", { text: "•" }));
+  button.replaceChildren("Waiting for approval…");
   title.textContent = "Continue in your browser";
   description.textContent = "A secure approval page is opening in your default browser. Approve this device there, then return here.";
   try {
-    renderConnection(await invoke("connect_hackzero"));
+    renderConnection(await invoke("connect_device"));
   } catch (error) {
-    console.error("Device Checker pairing failed", error);
+    console.error("Compliance Agent pairing failed", error);
     button.disabled = false;
-    button.replaceChildren("Try again ", el("b", { text: "→" }));
+    button.replaceChildren("Try again");
     title.textContent = "Could not start sign in";
     // Never display a server response or internal error here. Those responses
     // can include proxy HTML and security details.
     description.textContent = "We couldn't open the secure approval page. Check your connection and try again.";
     return;
   }
-  try {
-    // Start at sign-in with the person's consent, only after this device is paired.
-    await enableAutostart();
-  } catch (error) {
-    console.error("Device Checker could not enable start at sign-in", error);
-  }
   // Send the first signed report right away.
   await refresh();
 });
 
-$("#disconnectHackZero").addEventListener("click", async () => {
-  const button = $("#disconnectHackZero");
-  if (!window.confirm("Disconnect this device from HackZero? It will stop sending posture checks.")) return;
+$("#disconnectDevice").addEventListener("click", async () => {
+  const button = $("#disconnectDevice");
+  if (!window.confirm("Disconnect this device from Compliance Everywhere? It will stop sending posture checks.")) return;
   button.disabled = true;
   try {
-    renderConnection(await invoke("disconnect_hackzero"));
+    renderConnection(await invoke("disconnect_device"));
   } catch (error) {
     // Never leave a click with no feedback.
-    console.error("Device Checker disconnect failed", error);
+    console.error("Compliance Agent disconnect failed", error);
     $("#connectionDescription").textContent = "We couldn't disconnect this device. Check your connection and try again.";
     $("#description").textContent = `We couldn't disconnect this device: ${errorText(error)} Check your connection and try again.`;
   } finally {

@@ -27,7 +27,7 @@ const (
 	Unknown Status = "unknown"
 )
 
-// LimitMinutes is the HackZero screen-lock policy limit. Exactly 15 passes.
+// LimitMinutes is the Compliance Everywhere screen-lock policy limit. Exactly 15 passes.
 const LimitMinutes = 15
 
 // Reason codes. They are part of the wire contract.

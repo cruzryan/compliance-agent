@@ -1,4 +1,4 @@
-// Person-facing copy for Device Checker results.
+// Person-facing copy for Compliance Agent results.
 //
 // This module is pure: no DOM, no Tauri. It turns the collector's structured
 // RunResult (see the device contract) into sentences that say which setting,
@@ -415,7 +415,7 @@ export function describeSignal(key, signal, platform) {
   const state = rowState(signal);
   const label = LABELS[key] || clean(key, 60);
   if (state === "missing") {
-    return { key, label, state, pill: STATUS_PILL.missing, lines: [unread("Not reported. The checker did not send this setting. Update Device Checker, then check again.")] };
+    return { key, label, state, pill: STATUS_PILL.missing, lines: [unread("Not reported. The checker did not send this setting. Update Compliance Agent, then check again.")] };
   }
   const builder = BUILDERS[key];
   let lines = builder ? builder(signal, platform) : [];
@@ -427,7 +427,7 @@ export function describeSignal(key, signal, platform) {
     lines.push(bad("This setting is not on."));
   }
   if (!KNOWN_STATUSES.has(signal.status)) {
-    lines = [unread("Device Checker sent a result this app doesn't recognize. Update Device Checker, then check again.")];
+    lines = [unread("Compliance Agent sent a result this app doesn't recognize. Update Compliance Agent, then check again.")];
   } else if (state === "unknown" && !lines.some((line) => line.tone === "unknown" || line.tone === "fail")) {
     lines.push(unread(`We couldn't read this setting on ${deviceNoun(platform)}.`));
   }
@@ -479,7 +479,7 @@ export function summarize(result) {
       description = "Fix the items below, then check again. We only read these settings; we never change them.";
       summaryDetail = `${count} ${plural(count, "setting needs", "settings need")} attention`;
     } else {
-      description = "Your HackZero dashboard reports a problem with this device. See what your dashboard shows below.";
+      description = "Your Compliance Everywhere dashboard reports a problem with this device. See what your dashboard shows below.";
       summaryDetail = "Your dashboard reports a problem";
     }
     summaryStatus = "Action needed";
@@ -523,17 +523,17 @@ export function describeDelivery(result, { formatTime = defaultTime } = {}) {
   switch (result.delivery) {
     case "uploaded": {
       const at = parseTime(result.checked_at);
-      return { tone: "ok", text: at ? `Sent to HackZero at ${formatTime(at)}` : "Sent to HackZero" };
+      return { tone: "ok", text: at ? `Sent to Compliance Everywhere at ${formatTime(at)}` : "Sent to Compliance Everywhere" };
     }
     case "queued":
-      return { tone: "warn", text: "Couldn't reach HackZero. It will retry automatically." };
+      return { tone: "warn", text: "Couldn't reach Compliance Everywhere. It will retry automatically." };
     case "rejected": {
       const code = status !== null ? ` (${status})` : "";
-      const gone = [401, 403, 404, 410].includes(status) ? " This computer may no longer be connected." : " Try updating Device Checker, then check again.";
-      return { tone: "fail", text: `HackZero didn't accept this report${code}.${gone}` };
+      const gone = [401, 403, 404, 410].includes(status) ? " This computer may no longer be connected." : " Try updating Compliance Agent, then check again.";
+      return { tone: "fail", text: `Compliance Everywhere didn't accept this report${code}.${gone}` };
     }
     case "not_sent":
-      return { tone: "info", text: "This check was not sent to HackZero." };
+      return { tone: "info", text: "This check was not sent to Compliance Everywhere." };
     default:
       return null;
   }
@@ -652,7 +652,7 @@ export function diagnosticsSections(diag, { appVersion, error, fallbackLast, con
 }
 
 export function diagnosticsText(sections) {
-  const out = ["HackZero Device Checker diagnostics"];
+  const out = ["Compliance Agent diagnostics"];
   for (const section of sections) {
     out.push("", `== ${section.title} ==`);
     for (const [key, value] of section.rows) out.push(`${key}: ${value}`);

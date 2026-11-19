@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hackzero/device-checker/internal/agent"
@@ -26,6 +28,11 @@ import (
 
 // version is set at release build time with -ldflags "-X main.version=...".
 var version = "dev"
+
+// previewBuild is set with -ldflags "-X main.previewBuild=1" for a local
+// preview. A preview reads an installed app's state where it is and never
+// moves it, so the installed app keeps working beside it.
+var previewBuild = ""
 
 // lockWait is how long a second run waits for the running one to finish.
 const lockWait = 20 * time.Second
@@ -85,14 +92,65 @@ type savedState struct {
 	PersonName    string          `json:"person_name"`
 }
 
+var (
+	stateDirOnce sync.Once
+	stateDirPath string
+)
+
 // stateDir holds the identity, pairing, scheduler state, queue, last report
 // and lock file. Everything in it is owner-only.
 func stateDir() string {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		base = os.TempDir()
+	stateDirOnce.Do(func() {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			base = os.TempDir()
+		}
+		stateDirPath = resolveStateDir(base, previewBuild == "")
+	})
+	return stateDirPath
+}
+
+// resolveStateDir returns this app's state directory under base. A device
+// paired before the app was renamed keeps its identity and pairing: its old
+// directory is moved to the new name once. When the move is not allowed or
+// fails (a file in it is still open), the old directory is used where it is.
+func resolveStateDir(base string, move bool) string {
+	current := filepath.Join(base, "ComplianceEverywhere", "ComplianceAgent")
+	legacy := filepath.Join(base, "HackZero", "DeviceChecker")
+	if _, err := os.Stat(current); err == nil {
+		return current
 	}
-	return filepath.Join(base, "HackZero", "DeviceChecker")
+	if _, err := os.Stat(legacy); err != nil {
+		return current
+	}
+	if !move {
+		return legacy
+	}
+	if err := os.MkdirAll(filepath.Dir(current), 0700); err != nil {
+		return legacy
+	}
+	if err := os.Rename(legacy, current); err != nil {
+		return legacy
+	}
+	// Removes the old parent only when nothing else is left in it.
+	_ = os.Remove(filepath.Dir(legacy))
+	return current
+}
+
+// The service moved from its first address to its current one. A pairing
+// saved under the first address reports to the current one from now on.
+const (
+	legacyServerHost  = "dashboard.hackzero.ai"
+	currentServerHost = "app.complianceeverywhere.com"
+)
+
+func currentReportURL(saved string) string {
+	parsed, err := url.Parse(saved)
+	if err != nil || !strings.EqualFold(parsed.Host, legacyServerHost) {
+		return saved
+	}
+	parsed.Host = currentServerHost
+	return parsed.String()
 }
 
 func statePath() string                { return identityPath(stateDir()) }
@@ -130,7 +188,7 @@ func loadStateFrom(dir string) (savedState, error) {
 	}
 	data, err := os.ReadFile(pairingPath(dir))
 	if err != nil {
-		return savedState{}, errors.New("this device is not connected to HackZero")
+		return savedState{}, errors.New("this device is not connected to Compliance Everywhere")
 	}
 	var state savedState
 	if err := json.Unmarshal(data, &state); err != nil {
@@ -138,6 +196,13 @@ func loadStateFrom(dir string) (savedState, error) {
 	}
 	if state.Identity.ID != device.ID || state.ReportURL == "" {
 		return savedState{}, errors.New("invalid pairing state")
+	}
+	if moved := currentReportURL(state.ReportURL); moved != state.ReportURL {
+		state.ReportURL = moved
+		// Best effort: the address is corrected again on the next load.
+		if updated, err := json.Marshal(state); err == nil {
+			_ = os.WriteFile(pairingPath(dir), updated, 0600)
+		}
 	}
 	// Private material is loaded only from the protected identity file; it is
 	// deliberately not duplicated into the pairing-state JSON.
@@ -159,7 +224,7 @@ func saveState(state savedState) error {
 
 func pairDevice(args []string) {
 	flags := flag.NewFlagSet("pair", flag.ExitOnError)
-	server := flags.String("server", "https://dashboard.hackzero.ai", "HackZero server URL")
+	server := flags.String("server", "https://app.complianceeverywhere.com", "Compliance Everywhere server URL")
 	name := flags.String("name", hostname(), "device name")
 	_ = flags.Parse(args)
 	device, err := loadOrCreateIdentity()
@@ -484,7 +549,7 @@ func failJSON(code, message string, exitCode int) {
 
 func failLock(err error) {
 	if errors.Is(err, agent.ErrBusy) {
-		failJSON("busy", "Another Device Checker check is already running. Try again in a moment.", 4)
+		failJSON("busy", "Another Compliance Agent check is already running. Try again in a moment.", 4)
 	}
 	failJSON("lock_failed", err.Error(), 1)
 }

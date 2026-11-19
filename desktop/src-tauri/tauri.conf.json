@@ -1,16 +1,16 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "HackZero Device Checker",
+  "productName": "Compliance Agent",
   "version": "0.1.0",
-  "identifier": "ai.hackzero.devicechecker",
+  "identifier": "com.complianceeverywhere.agent",
   "build": { "beforeDevCommand": "npm run frontend:dev", "beforeBuildCommand": "npm run frontend:build", "devUrl": "http://127.0.0.1:45873", "frontendDist": "../dist" },
-  "app": { "windows": [{ "label": "main", "title": "HackZero Device Checker", "width": 1020, "height": 760, "minWidth": 820, "minHeight": 700, "resizable": true }], "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost;" } },
-  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.ico", "icons/icon.icns", "icons/128x128.png"], "createUpdaterArtifacts": true },
+  "app": { "windows": [{ "label": "main", "title": "Compliance Agent", "width": 1020, "height": 760, "minWidth": 820, "minHeight": 700, "resizable": true }], "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost;" } },
+  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.ico", "icons/icon.icns", "icons/128x128.png"], "createUpdaterArtifacts": true, "windows": { "wix": { "upgradeCode": "a45b237e-1db9-5615-a462-156f1e0ca456" } }, "linux": { "deb": { "conflicts": ["hack-zero-device-checker", "hackzero-device-checker"], "replaces": ["hack-zero-device-checker", "hackzero-device-checker"] } } },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzQTczODA5RTVGRjYyQ0QKUldUTll2L2xDVGluczhaWWlzcnZlaUNnbUNzQUw0Qi94L0V0QXorSnl4MENkUzkyeEJ1VEUrbVcK",
-      "endpoints": ["https://github.com/cruzryan/hackzero-device-checker/releases/latest/download/latest.json"],
-      "windows": { "installMode": "passive" }
+      "endpoints": ["https://github.com/cruzryan/compliance-agent/releases/latest/download/latest.json"],
+      "windows": { "installMode": "quiet" }
     }
   }
 }

@@ -1,31 +1,45 @@
 <!doctype html>
 <html lang="en">
-  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>HackZero Device Checker</title><link rel="stylesheet" href="/src/style.css" /></head>
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Compliance Agent</title><link rel="stylesheet" href="/src/style.css" /></head>
   <body>
     <main class="app-shell unpaired">
-      <header class="globalbar"><div class="brand"><span class="mark"></span><span>HACKZERO</span><i></i></div></header>
-      <div class="atmosphere" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="star s1"></span><span class="star s2"></span><span class="star s3"></span><span class="star s4"></span></div>
+      <header class="globalbar"><img class="brand-logo" src="/brand/logo.png" alt="Compliance Everywhere" draggable="false" /></header>
+      <div class="atmosphere" aria-hidden="true"></div>
       <section class="hero-stage">
-        <div class="intro"><p class="eyebrow">POSTURE / 01</p><h1 id="headline">Checking this device</h1><p id="description">A read-only check of the settings that help protect company data.</p><div class="telemetry"><div><span class="telemetry-icon clock" aria-hidden="true"></span><p>LAST CHECK</p><strong id="checkedAt">Checking this device</strong></div><div><span class="telemetry-icon update" aria-hidden="true">↑</span><p>DEVICE CHECKER</p><strong id="updateState">Checking for updates…</strong></div></div><p class="delivery-note" id="deliveryNote" role="status" hidden></p></div>
-        <section class="connection-card" id="connectionCard" aria-live="polite"><div class="transmission-art" aria-hidden="true"><i></i><i></i><i></i></div><strong id="connectionTitle">Connect this device to HackZero</strong><span id="connectionDescription">Sign in to send this device's read-only posture record to your workspace.</span><button id="connectHackZero">Connect device <b>→</b></button></section>
-      </section>
-      <section class="posture-zone" aria-label="Device posture"><div class="posture-heading"><p>SECURITY SIGNALS</p><div class="status-summary"><span></span><strong id="summaryStatus">Checking posture</strong><small id="summaryDetail">Reading local settings…</small></div></div><section class="posture" id="posture" aria-live="polite"></section><section class="dashboard-verdict" id="dashboardVerdict" aria-label="What your dashboard shows" hidden></section></section>
-      <footer>
-        <div class="footer-secondary">
-          <button class="secondary-action" id="openDiagnostics" type="button">Diagnostics</button>
-          <button class="secondary-action" id="disconnectHackZero" type="button" hidden>Disconnect device</button>
-          <button class="secondary-action danger" id="uninstallDeviceChecker" type="button" hidden>Disconnect and uninstall</button>
+        <div class="intro">
+          <div class="status-glyph" aria-hidden="true">
+            <svg class="glyph-pass" viewBox="0 0 24 24"><path d="M6.5 12.6l3.7 3.7 7.3-8.1" /></svg>
+            <svg class="glyph-alert" viewBox="0 0 24 24"><path d="M12 6.6v6.8M12 17.2v.2" /></svg>
+            <svg class="glyph-unknown" viewBox="0 0 24 24"><path d="M9.3 9.4a2.8 2.8 0 1 1 4.2 2.4c-.9.6-1.5 1.1-1.5 2.2M12 17.2v.2" /></svg>
+          </div>
+          <h1 id="headline">Checking this device</h1>
+          <p id="description">A read-only check of the settings that help protect company data.</p>
+          <p class="meta"><span id="checkedAt">Checking this device</span><span class="delivery-note" id="deliveryNote" role="status" hidden></span></p>
         </div>
-        <button class="update-action" id="installUpdate" type="button">Check for updates</button><button class="check-action" id="checkAgain" type="button">Check again</button>
+        <section class="connection-card" id="connectionCard" aria-live="polite"><img class="connection-mark" src="/brand/mark.png" alt="" aria-hidden="true" draggable="false" /><strong id="connectionTitle">Connect this device to Compliance Everywhere</strong><span id="connectionDescription">Sign in to send this device's read-only posture record to your workspace.</span><button id="connectDevice">Connect device</button></section>
+      </section>
+      <section class="posture-zone" aria-label="Device posture"><section class="posture" id="posture" aria-live="polite"></section><section class="dashboard-verdict" id="dashboardVerdict" aria-label="What your dashboard shows" hidden></section></section>
+      <footer>
+        <div class="options">
+          <button class="secondary-action" id="openOptions" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="optionsMenu">Options</button>
+          <div class="options-menu" id="optionsMenu" hidden>
+            <button id="openDiagnostics" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg><span>Diagnostics</span></button>
+            <button id="checkUpdates" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16" /><path d="M3 21v-5h5" /></svg><span>Check for updates</span><small id="updateState"></small></button>
+            <button id="disconnectDevice" type="button" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></svg><span>Disconnect device</span></button>
+            <button class="danger" id="uninstallDeviceChecker" type="button" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /></svg><span>Disconnect and uninstall</span></button>
+          </div>
+        </div>
+        <button class="secondary-action" id="installUpdate" type="button" hidden>Install update</button><button class="check-action" id="checkAgain" type="button">Check again</button>
       </footer>
-      <section class="launch-screen" id="launchScreen" aria-live="polite"><div class="launch-brand"><span class="mark"></span><span>HACKZERO</span><i></i></div><div class="launch-copy"><div class="launch-heading"><div class="launch-loader" aria-hidden="true"><span></span></div><h1 id="launchTitle">Loading HackZero Device Checker</h1></div><p id="launchDescription">This might take a moment.</p><button id="launchRetry" hidden>Try again</button></div></section>
+      <div class="options-scrim" id="optionsScrim" aria-hidden="true" hidden></div>
+      <section class="launch-screen" id="launchScreen" aria-live="polite"><img class="brand-logo" src="/brand/logo.png" alt="Compliance Everywhere" draggable="false" /><div class="launch-copy"><div class="launch-loader" aria-hidden="true"></div><h1 id="launchTitle">Loading Compliance Agent</h1><p id="launchDescription">This might take a moment.</p><button id="launchRetry" hidden>Try again</button></div></section>
     </main>
     <dialog class="modal" id="diagnosticsDialog" aria-labelledby="diagnosticsTitle">
       <div class="modal-card">
         <header class="modal-header"><h2 id="diagnosticsTitle">Diagnostics</h2><button class="modal-close" type="button" data-close aria-label="Close diagnostics">×</button></header>
         <p class="modal-lede">What this computer reported, for support. Private keys are never shown.</p>
         <div class="modal-body" id="diagnosticsBody" tabindex="0"></div>
-        <div class="modal-actions"><span class="modal-status" id="diagnosticsStatus" role="status"></span><button class="secondary-action" type="button" data-close>Close</button><button class="check-action plain" type="button" id="copyDiagnostics">Copy diagnostics</button></div>
+        <div class="modal-actions"><span class="modal-status" id="diagnosticsStatus" role="status"></span><button class="secondary-action" type="button" data-close>Close</button><button class="check-action" type="button" id="copyDiagnostics">Copy diagnostics</button></div>
       </div>
     </dialog>
     <dialog class="modal" id="uninstallDialog" aria-labelledby="uninstallTitle">

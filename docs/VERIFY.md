@@ -15,7 +15,7 @@ Download an installer and `SHA256SUMS.txt` from the same immutable GitHub
 release tag.
 
 ```powershell
-Get-FileHash .\HackZero-Device-Checker-windows-amd64.msi -Algorithm SHA256
+Get-FileHash .\Compliance-Agent-windows-amd64.msi -Algorithm SHA256
 ```
 
 ```sh
@@ -45,7 +45,7 @@ Production `.exe` and `.msi` releases will show a valid Authenticode signature
 with the expected publisher. In PowerShell:
 
 ```powershell
-Get-AuthenticodeSignature .\HackZero-Device-Checker-windows-amd64.msi | Format-List
+Get-AuthenticodeSignature .\Compliance-Agent-windows-amd64.msi | Format-List
 ```
 
 The status must be `Valid`; do not install an artifact described as signed when
@@ -56,8 +56,8 @@ Windows reports an unknown, invalid, or mismatched publisher.
 Production `.pkg` releases will be Developer ID signed and notarized. Verify:
 
 ```sh
-pkgutil --check-signature HackZero-Device-Checker-macos-arm64.pkg
-spctl --assess --type install --verbose HackZero-Device-Checker-macos-arm64.pkg
+pkgutil --check-signature Compliance-Agent-macos-arm64.pkg
+spctl --assess --type install --verbose Compliance-Agent-macos-arm64.pkg
 ```
 
 The signature and Gatekeeper assessment must identify the expected publisher.

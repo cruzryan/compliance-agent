@@ -1,6 +1,6 @@
 # Security policy
 
-Report a suspected vulnerability privately to `security@hackzero.ai` with a
+Report a suspected vulnerability privately to `security@complianceeverywhere.com` with a
 clear reproduction and impact description. Do not include customer data, access
 tokens, private keys, or device reports in public issues.
 

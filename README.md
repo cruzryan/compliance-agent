@@ -1,6 +1,6 @@
-# HackZero Device Checker
+# Compliance Agent
 
-[![CI](https://github.com/cruzryan/hackzero-device-checker/actions/workflows/ci.yml/badge.svg)](https://github.com/cruzryan/hackzero-device-checker/actions/workflows/ci.yml)
+[![CI](https://github.com/cruzryan/compliance-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/cruzryan/compliance-agent/actions/workflows/ci.yml)
 
 A small, read-only endpoint evidence collector for SOC 2 controls. It checks
 the security posture of a device. The repository also contains tested building
@@ -59,7 +59,7 @@ notarized until that platform's genuine signing credentials are configured.
 ### Desktop application
 
 `desktop/` is the cross-platform [Tauri 2](https://v2.tauri.app/) shell: a
-custom HackZero window with a native tray/menu. The UI is allowed to run only
+custom Compliance Everywhere window with a native tray/menu. The UI is allowed to run only
 fixed local checker actions; it never turns UI text into a shell command, and
 it needs no permanent loopback server.
 
