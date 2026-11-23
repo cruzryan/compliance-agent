@@ -28,6 +28,11 @@ const BACKGROUND_POLL: Duration = Duration::from_secs(30);
 const WAKE_GAP: Duration = Duration::from_secs(120);
 /// After a wake, give the network a moment before the catch-up tick.
 const AFTER_WAKE_DELAY: Duration = Duration::from_secs(45);
+/// How often the agent asks for the company's compliance dates. The collector
+/// tells the person once about a new task or a task that just became late.
+const DUE_EVERY: Duration = Duration::from_secs(15 * 60);
+/// The first dates check after launch (and so after sign-in).
+const FIRST_DUE_AFTER: Duration = Duration::from_secs(20);
 const MAX_ERROR_CHARS: usize = 300;
 
 /// The ONLY collector invocations this app can make. Every argument is fixed
@@ -42,6 +47,16 @@ enum Collector {
     Connection,
     Pair,
     Disconnect,
+    Due,
+    DueCached,
+    NotifySettings,
+    NotifyOn,
+    NotifyOff,
+    NotifyUpdate,
+    WebFilterStatus,
+    WebFilterPlan,
+    WebFilterOn,
+    WebFilterOff,
 }
 
 impl Collector {
@@ -55,6 +70,16 @@ impl Collector {
             Collector::Connection => &["connection"],
             Collector::Pair => &["pair"],
             Collector::Disconnect => &["disconnect"],
+            Collector::Due => &["due"],
+            Collector::DueCached => &["due", "--cached"],
+            Collector::NotifySettings => &["notify-settings"],
+            Collector::NotifyOn => &["notify-settings", "on"],
+            Collector::NotifyOff => &["notify-settings", "off"],
+            Collector::NotifyUpdate => &["notify-update"],
+            Collector::WebFilterStatus => &["webfilter", "status"],
+            Collector::WebFilterPlan => &["webfilter", "plan"],
+            Collector::WebFilterOn => &["webfilter", "on"],
+            Collector::WebFilterOff => &["webfilter", "off"],
         }
     }
 }
@@ -298,6 +323,99 @@ async fn disconnect_device(app: AppHandle) -> Result<Connection, String> {
     .await
 }
 
+/// Runs one collector command and returns the JSON it printed.
+fn collector_json(app: &AppHandle, which: Collector, extra: &[String]) -> Result<Value, String> {
+    let output = run_collector(app, which, extra)?;
+    if output.status.success() {
+        if let Some(value) = parse_json(&output.stdout) {
+            return Ok(value);
+        }
+    }
+    Err(failure_message(&output))
+}
+
+/// The saved compliance dates, without the network. The background loop
+/// refreshes them every 15 minutes and then emits `due-updated`.
+#[tauri::command]
+async fn due_soon(app: AppHandle) -> Result<Value, String> {
+    blocking(move || collector_json(&app, Collector::DueCached, &[])).await
+}
+
+/// Asks the service for the dates now ("Check again").
+#[tauri::command]
+async fn refresh_due(app: AppHandle) -> Result<Value, String> {
+    blocking(move || {
+        let _guard = gate(&app);
+        collector_json(&app, Collector::Due, &[])
+    })
+    .await
+}
+
+/// The one switch, "Notify me about new tasks", and what the system allows.
+#[tauri::command]
+async fn notification_settings(app: AppHandle) -> Result<Value, String> {
+    blocking(move || collector_json(&app, Collector::NotifySettings, &[])).await
+}
+
+#[tauri::command]
+async fn set_notifications(app: AppHandle, enabled: bool) -> Result<Value, String> {
+    let which = if enabled { Collector::NotifyOn } else { Collector::NotifyOff };
+    blocking(move || collector_json(&app, which, &[])).await
+}
+
+/// How web filtering would be turned on here: the exact commands, shown
+/// before the person agrees.
+#[tauri::command]
+async fn web_filter_plan(app: AppHandle) -> Result<Value, String> {
+    blocking(move || collector_json(&app, Collector::WebFilterPlan, &[])).await
+}
+
+#[tauri::command]
+async fn web_filter_status(app: AppHandle) -> Result<Value, String> {
+    blocking(move || collector_json(&app, Collector::WebFilterStatus, &[])).await
+}
+
+/// Turns web filtering on or off. Only the window's button calls this, after
+/// the person agreed; nothing in the background ever does.
+#[tauri::command]
+async fn set_web_filter(app: AppHandle, on: bool) -> Result<Value, String> {
+    let which = if on { Collector::WebFilterOn } else { Collector::WebFilterOff };
+    blocking(move || {
+        let _guard = gate(&app);
+        collector_json(&app, which, &[])
+    })
+    .await
+}
+
+/// A plain version number such as 0.2.0, and nothing else.
+fn plain_version(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.len() <= 6 && part.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The one reminder that an update is waiting. The version is checked here,
+/// so only a plain version number ever becomes a collector argument.
+#[tauri::command]
+async fn notify_update(app: AppHandle, version: String) -> Result<Value, String> {
+    if !plain_version(&version) {
+        return Err("Not a version number.".into());
+    }
+    blocking(move || {
+        let extra = vec!["--version".to_string(), version];
+        collector_json(&app, Collector::NotifyUpdate, &extra)
+    })
+    .await
+}
+
+/// Brings the window back from the tray (the update window opens in it).
+#[tauri::command]
+fn show_window(app: AppHandle) {
+    show_main_window(&app);
+}
+
 /// The sign-in task on Windows. The app needs administrator rights, and
 /// Windows silently skips such apps in the per-user Run key, so a scheduled
 /// task with the highest run level starts it instead, without a prompt.
@@ -539,13 +657,27 @@ fn background_tick(app: &AppHandle) {
     let _ = app.emit("report-updated", ());
 }
 
+/// One compliance dates check: the collector asks the service, tells the
+/// person once about new and late tasks, and saves the answer for the window.
+fn due_tick(app: &AppHandle) {
+    let _guard = gate(app);
+    let paired = read_connection(app).map(|c| c.paired).unwrap_or(false);
+    if !paired {
+        return;
+    }
+    let _ = run_collector(app, Collector::Due, &[]);
+    let _ = app.emit("due-updated", ());
+}
+
 /// The Tauri process is the resident tray host. It runs the collector's
-/// scheduler tick once an hour. The first tick waits a full interval: the
-/// launch check already sent a report. A long gap between loop iterations
-/// means the computer slept; then the page reloads and a catch-up tick runs.
+/// scheduler tick once an hour, and the compliance dates check every 15
+/// minutes. The first scheduler tick waits a full interval: the launch check
+/// already sent a report. A long gap between loop iterations means the
+/// computer slept; then the page reloads and both catch up.
 fn background_loop(app: AppHandle) {
     let mut last_wall = SystemTime::now();
     let mut next_tick = last_wall + BACKGROUND_EVERY;
+    let mut next_due = last_wall + FIRST_DUE_AFTER;
     loop {
         std::thread::sleep(BACKGROUND_POLL);
         let now = SystemTime::now();
@@ -554,14 +686,22 @@ fn background_loop(app: AppHandle) {
         if gap > WAKE_GAP {
             let _ = app.emit("system-resumed", ());
             next_tick = now + AFTER_WAKE_DELAY;
+            next_due = now + AFTER_WAKE_DELAY;
         }
         // The clock moved backwards (manual change): do not wait longer than one interval.
         if next_tick.duration_since(now).map(|wait| wait > BACKGROUND_EVERY).unwrap_or(false) {
             next_tick = now + BACKGROUND_EVERY;
         }
+        if next_due.duration_since(now).map(|wait| wait > DUE_EVERY).unwrap_or(false) {
+            next_due = now + DUE_EVERY;
+        }
         if now >= next_tick {
             next_tick = now + BACKGROUND_EVERY;
             background_tick(&app);
+        }
+        if now >= next_due {
+            next_due = SystemTime::now() + DUE_EVERY;
+            due_tick(&app);
         }
     }
 }
@@ -639,7 +779,16 @@ fn main() {
             uninstall_device_checker,
             open_uninstall_location,
             installed_build,
-            quit_app
+            quit_app,
+            due_soon,
+            refresh_due,
+            notification_settings,
+            set_notifications,
+            web_filter_plan,
+            web_filter_status,
+            set_web_filter,
+            notify_update,
+            show_window
         ])
         .run(tauri::generate_context!())
         .expect("Tauri application error");

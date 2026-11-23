@@ -18,11 +18,12 @@
         </div>
         <section class="connection-card" id="connectionCard" aria-live="polite"><img class="connection-mark" src="/brand/mark.png" alt="" aria-hidden="true" draggable="false" /><strong id="connectionTitle">Connect this device to Compliance Everywhere</strong><span id="connectionDescription">Sign in to send this device's read-only posture record to your workspace.</span><button id="connectDevice">Connect device</button></section>
       </section>
-      <section class="posture-zone" aria-label="Device posture"><section class="posture" id="posture" aria-live="polite"></section><section class="dashboard-verdict" id="dashboardVerdict" aria-label="What your dashboard shows" hidden></section></section>
+      <section class="posture-zone" aria-label="Device posture"><section class="coming-up" id="comingUp" aria-label="Compliance dates coming up" hidden></section><section class="posture" id="posture" aria-live="polite"></section><section class="dashboard-verdict" id="dashboardVerdict" aria-label="What your dashboard shows" hidden></section></section>
       <footer>
         <div class="options">
           <button class="secondary-action" id="openOptions" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="optionsMenu">Options</button>
           <div class="options-menu" id="optionsMenu" hidden>
+            <button id="openSettings" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></svg><span>Notification settings</span></button>
             <button id="openDiagnostics" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg><span>Diagnostics</span></button>
             <button id="checkUpdates" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16" /><path d="M3 21v-5h5" /></svg><span>Check for updates</span><small id="updateState"></small></button>
             <button id="disconnectDevice" type="button" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></svg><span>Disconnect device</span></button>
@@ -42,11 +43,37 @@
         <div class="modal-actions"><span class="modal-status" id="diagnosticsStatus" role="status"></span><button class="secondary-action" type="button" data-close>Close</button><button class="check-action" type="button" id="copyDiagnostics">Copy diagnostics</button></div>
       </div>
     </dialog>
+    <dialog class="modal" id="settingsDialog" aria-labelledby="settingsTitle">
+      <div class="modal-card narrow">
+        <header class="modal-header"><h2 id="settingsTitle">Notification settings</h2><button class="modal-close" type="button" data-close aria-label="Close settings">×</button></header>
+        <p class="modal-lede">How Compliance Agent tells you about your company's compliance tasks.</p>
+        <div class="modal-body plain settings-body">
+          <label class="setting"><input type="checkbox" id="settingNotify" checked /><span><strong>Notify me about new tasks</strong><small>Compliance Agent shows a notification on this computer and lights up in the taskbar when a new task appears or a task becomes late. Once for each task, never twice. New tasks are always marked New in this window, whatever you choose here.</small></span></label>
+          <p class="setting-status" id="notificationStatus" role="status"></p>
+        </div>
+        <div class="modal-actions"><button class="secondary-action" type="button" id="sendTestTask" hidden>Send a test task</button><button class="check-action" type="button" data-close>Done</button></div>
+      </div>
+    </dialog>
     <dialog class="modal" id="uninstallDialog" aria-labelledby="uninstallTitle">
       <div class="modal-card narrow">
         <header class="modal-header"><h2 id="uninstallTitle">Disconnect and uninstall?</h2><button class="modal-close" type="button" id="uninstallClose" aria-label="Close">×</button></header>
         <div class="modal-body plain" id="uninstallBody"></div>
         <div class="modal-actions" id="uninstallActions"></div>
+      </div>
+    </dialog>
+    <dialog class="modal" id="webFilterDialog" aria-labelledby="webFilterTitle">
+      <div class="modal-card">
+        <header class="modal-header"><h2 id="webFilterTitle">Turn on web filtering?</h2><button class="modal-close" type="button" data-close aria-label="Close">×</button></header>
+        <div class="modal-body plain webfilter-body" id="webFilterBody"></div>
+        <div class="modal-actions" id="webFilterActions"></div>
+      </div>
+    </dialog>
+    <dialog class="modal update-modal" id="updateDialog" aria-labelledby="updateTitle">
+      <div class="update-card">
+        <button class="modal-close update-close" type="button" id="updateClose" aria-label="Close and remind me tomorrow">×</button>
+        <div class="update-head"><img src="/brand/mark.png" alt="" width="40" height="40" draggable="false" /><div><h2 id="updateTitle">A new version of Compliance Agent is available</h2><p id="updateSub"></p></div></div>
+        <div class="update-notes"><h3>What's new</h3><div id="updateNotes"></div></div>
+        <div class="update-foot"><small id="updateStatus" role="status">Takes about a minute.</small><div class="update-buttons"><button class="secondary-action" type="button" id="updateRemind">Remind me tomorrow</button><button class="check-action" type="button" id="updateInstall">Install and restart</button></div></div>
       </div>
     </dialog>
     <script type="module" src="/src/main.js"></script>

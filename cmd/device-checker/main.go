@@ -20,6 +20,7 @@ import (
 
 	"github.com/hackzero/device-checker/internal/agent"
 	"github.com/hackzero/device-checker/internal/identity"
+	"github.com/hackzero/device-checker/internal/notify"
 	"github.com/hackzero/device-checker/internal/pairing"
 	"github.com/hackzero/device-checker/internal/posture"
 	"github.com/hackzero/device-checker/internal/probe"
@@ -58,13 +59,23 @@ func main() {
 		printConnection()
 	case "disconnect":
 		disconnectDevice()
+	case "notify-test":
+		notifyTest(os.Args[2:])
+	case "notify-settings":
+		notifySettings(os.Args[2:])
+	case "notify-update":
+		notifyUpdate(os.Args[2:])
+	case "due":
+		dueCommand(os.Args[2:])
+	case "webfilter":
+		webFilterCommand(os.Args[2:])
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: device-checker <status|report|run [--once]|last|diagnose|pair|connection|disconnect>")
+	fmt.Fprintln(os.Stderr, "usage: device-checker <status|report|run [--once]|last|diagnose|pair|connection|disconnect|due [--cached]|webfilter <status|plan|on|off>|notify-settings [on|off]|notify-update --version V>")
 	os.Exit(2)
 }
 
@@ -630,3 +641,51 @@ func openBrowser(url string) error {
 }
 
 func fatal(err error) { fmt.Fprintln(os.Stderr, "device-checker:", err); os.Exit(1) }
+
+// notifyTest runs the new-task logic on a list of items from a file, in its
+// own folder (never the agent's state), and prints what it did. It is how the
+// notification and the taskbar attention are tried on a real computer.
+func notifyTest(args []string) {
+	flags := flag.NewFlagSet("notify-test", flag.ExitOnError)
+	dir := flags.String("dir", "", "folder for the test state (required; never the agent's own)")
+	itemsPath := flags.String("items", "", "JSON file with the task list")
+	_ = flags.Parse(args)
+	if *dir == "" || *itemsPath == "" {
+		fatal(errors.New("notify-test needs --dir and --items"))
+	}
+	data, err := os.ReadFile(*itemsPath)
+	if err != nil {
+		fatal(err)
+	}
+	var items []notify.Item
+	if err := json.Unmarshal(bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF}), &items); err != nil {
+		fatal(err)
+	}
+	result, err := notify.Process(*dir, items)
+	if err != nil {
+		fatal(err)
+	}
+	printJSON(result)
+}
+
+// notifySettings prints or sets the one switch, "Notify me about new tasks",
+// with what the system itself allows: `notify-settings [--dir D] [on|off]`.
+func notifySettings(args []string) {
+	flags := flag.NewFlagSet("notify-settings", flag.ExitOnError)
+	dir := flags.String("dir", "", "state folder (default: the agent's own)")
+	_ = flags.Parse(args)
+	target := *dir
+	if target == "" {
+		target = stateDir()
+	}
+	switch flags.Arg(0) {
+	case "on", "off":
+		if err := notify.SaveSettings(target, notify.Settings{Enabled: flags.Arg(0) == "on"}); err != nil {
+			fatal(err)
+		}
+	case "":
+	default:
+		fatal(errors.New("notify-settings takes on or off"))
+	}
+	printJSON(map[string]any{"enabled": notify.LoadSettings(target).Enabled, "system": notify.Status()})
+}

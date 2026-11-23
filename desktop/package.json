@@ -8,7 +8,8 @@
     "frontend:dev": "vite --host 127.0.0.1 --port 45873 --strictPort",
     "frontend:build": "vite build",
     "build": "tauri build",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "release": "node ../scripts/release.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.1",

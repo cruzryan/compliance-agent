@@ -44,6 +44,43 @@ jobs:
         run: |
           npm ci
           npm test
+      - name: Release notes are well formed
+        run: node scripts/check-release-notes.mjs
+  # Compiles the Tauri app on every pull request, so a Rust mistake shows up
+  # here and never for the first time in a release that every agent gets.
+  desktop-rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
+      - name: System libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: The bundled collector the app packages
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            go build -o bin/device-checker-windows-amd64.exe ./cmd/device-checker
+          else
+            go build -o bin/device-checker-linux-amd64 ./cmd/device-checker
+          fi
+      - name: Frontend
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run frontend:build
+      - name: Compile the desktop app
+        working-directory: desktop/src-tauri
+        run: cargo check
   race:
     runs-on: ubuntu-latest
     steps:

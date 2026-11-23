@@ -476,7 +476,7 @@ export function summarize(result) {
     headline = "This device needs attention";
     const count = failed.length;
     if (count) {
-      description = "Fix the items below, then check again. We only read these settings; we never change them.";
+      description = "Fix the items below, then check again. We only change a setting when you press its button.";
       summaryDetail = `${count} ${plural(count, "setting needs", "settings need")} attention`;
     } else {
       description = "Your Compliance Everywhere dashboard reports a problem with this device. See what your dashboard shows below.";
@@ -492,7 +492,7 @@ export function summarize(result) {
   } else if (passed.length === REQUIRED_SIGNALS.length) {
     tone = "protected";
     headline = "This device is protected";
-    description = "These security settings are on. We only read them; we never change anything on your device.";
+    description = "These security settings are on. We only change a setting when you press its button.";
     summaryStatus = "Device protected";
     summaryDetail = `All ${passed.length} protections are on`;
   } else {

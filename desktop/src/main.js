@@ -14,6 +14,7 @@ import {
   platformName,
   clean
 } from "./copy.js";
+import { parseReleaseNotes } from "./notes.js";
 
 // Fixed first-party documentation only. A checker report never provides a URL.
 const remediation = {
@@ -37,7 +38,8 @@ const remediation = {
   }
 };
 
-const UPDATE_CHECK_EVERY = 6 * 60 * 60 * 1000;
+// Hourly, so a release reaches a running agent the same day.
+const UPDATE_CHECK_EVERY = 60 * 60 * 1000;
 const $ = (selector) => document.querySelector(selector);
 const shell = $(".app-shell");
 
@@ -170,6 +172,468 @@ function renderDashboard(server) {
   target.append(list);
 }
 
+// ------------------------------------------------------------------ coming up
+
+// What is due across the company's compliance programs: open security fixes
+// (Dependabot), risk fix plans, ISO 27001 items and SOC 2 evidence renewals.
+// Collapsed to one line by default so it never competes with the device
+// checks. Only short labels reach this window (NC-02, R-19, CM-03, an advisory
+// id); names and details stay in the browser, behind the person's sign-in.
+// The button opens a fixed first-party address, never one the server sends.
+const APP_ORIGIN = "https://app.complianceeverywhere.com";
+const COMING_UP_URL = `${APP_ORIGIN}/trust/iso27001`;
+const ITEM_TABS = new Set(["nonconformities", "risks", "objectives"]);
+const CONTROL_ID = /^[A-Z]{2,6}-\d{1,3}$/;
+
+// Where a row opens, built here from a fixed origin and an allowlist: a
+// register tab, or one control by its id. Anything else opens the overview.
+function itemUrl(item) {
+  if (item.group === "security") return `${APP_ORIGIN}/trust?control=OPS-05`;
+  if (ITEM_TABS.has(item.tab)) return `${APP_ORIGIN}/trust/iso27001?tab=${item.tab}`;
+  if (CONTROL_ID.test(item.control_id || "")) return `${APP_ORIGIN}/trust?control=${item.control_id}`;
+  return COMING_UP_URL;
+}
+const COMING_UP_GROUPS = [
+  { key: "security", title: "Security fixes" },
+  { key: "risks", title: "Risks" },
+  { key: "iso27001", title: "ISO 27001" },
+  { key: "soc2", title: "SOC 2" }
+];
+const SHOWN_PER_GROUP = 3;
+const COMING_UP_EVERY = 15 * 60 * 1000;
+let comingUpData = null;
+let comingUpOpen = false;
+
+// --- telling you about something new ------------------------------------
+//
+// The notification and the taskbar flash belong to the background agent
+// (device-checker `due`, run every 15 minutes by the tray process): it decides
+// what is new or newly late, remembers on disk what it already told you, and
+// uses the system's own notifications. This window reads what it saved, marks
+// new rows with New until the list is closed, and holds the one switch
+// ("Notify me about new tasks").
+// The first load ever counts nothing as new, so the window never shows a burst.
+const SEEN_KEY = "ca:seen-due";
+function readStored(key, fallback) {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(key));
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+function writeStored(key, value) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage blocked: the switches still work for this session.
+  }
+}
+// A task is what it is (its group and label), never its date: a moved
+// deadline is the same task, not a new one.
+const itemKey = (item) => `${item.group}|${item.label}`;
+let newKeys = new Set();
+
+// EXPERIMENT, local only: VITE_AGENT_DEMO=1 in a development build shows a
+// demo connection and the hackzero dates of 22 Nov 2026, and a new task
+// arrives 20 seconds after launch (or from Send a test task).
+const DEMO = import.meta.env.DEV && import.meta.env.VITE_AGENT_DEMO === "1";
+const demoNc = (label, what, due, days) => ({ group: "iso27001", tab: "nonconformities", label, what, due, days });
+const demoRisk = (label, due, days) => ({ group: "risks", tab: "risks", label, what: "Fix plan due", due, days });
+const DEMO_ITEMS = [
+  { group: "security", label: "GHSA-r3h5-4585-7x3w", what: "Dependabot, medium", due: "2027-02-12", days: 82 },
+  demoRisk("R-19", "2026-11-18", -4), demoRisk("R-12", "2026-11-21", -1),
+  demoNc("NC-02", "Fix due", "2026-11-21", -1), demoNc("NC-09", "Fix due", "2026-11-21", -1), demoNc("NC-23", "Fix due", "2026-11-21", -1),
+  demoNc("NC-25", "Fix due", "2026-11-24", 2),
+  ...["NC-10", "NC-11", "NC-13", "NC-16", "NC-17"].map((label) => demoNc(label, "Fix due", "2026-11-30", 8)),
+  ...["R-03", "R-06", "R-07"].map((label) => demoRisk(label, "2026-11-30", 8)),
+  demoRisk("R-16", "2026-12-10", 18), demoRisk("R-15", "2026-12-15", 23),
+  { group: "soc2", control_id: "CM-03", label: "CM-03", what: "Evidence renewal", due: "2026-12-22", days: 30 }
+];
+const demoExtra = [];
+let demoNumber = 27;
+function demoAddTask() {
+  demoNumber += 1;
+  demoExtra.push(demoNc(`NC-${demoNumber}`, "Reply to the auditor due", "2026-11-28", 6));
+}
+
+function markAllSeen() {
+  const items = Array.isArray(comingUpData?.items) ? comingUpData.items : [];
+  writeStored(SEEN_KEY, items.map(itemKey));
+  newKeys = new Set();
+}
+
+function dueWhen(days) {
+  if (days < 0) return `${-days} day${days === -1 ? "" : "s"} late`;
+  if (days === 0) return "Due today";
+  if (days === 1) return "Due tomorrow";
+  return `In ${days} days`;
+}
+
+function shortDate(iso) {
+  const date = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// Days until a date, from today on this computer: the saved answer can be a
+// day old, and "1 day late" must still be right.
+function daysUntil(iso) {
+  const due = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(due.getTime())) return NaN;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((due - today) / 86400000);
+}
+
+function renderComingUp() {
+  const target = $("#comingUp");
+  target.replaceChildren();
+  const items = Array.isArray(comingUpData?.items) ? comingUpData.items.filter((i) => Number.isFinite(i?.days)) : [];
+  // Nothing fetched yet (a new install, or the service never answered): no
+  // card, rather than an empty one that looks like "nothing is due".
+  if (!connection?.paired || !comingUpData || (!comingUpData.available && !items.length)) {
+    target.hidden = true;
+    scheduleFit();
+    return;
+  }
+  target.hidden = false;
+  if (!items.length) {
+    // Loaded and empty: say so, so an empty card never looks like a broken one.
+    target.classList.remove("has-late");
+    target.append(el("div", { className: "coming-up-toggle empty" }, [
+      el("span", { className: "coming-up-title", text: comingUpData.audience === "you" ? "Your compliance dates" : "Compliance dates for your company" }),
+      el("span", { className: "coming-up-summary", text: `Nothing due in the next ${comingUpData.days || 30} days` })
+    ]));
+    scheduleFit();
+    return;
+  }
+  const late = items.filter((i) => i.days < 0).length;
+  const soon = items.length - late;
+  const fresh = items.filter((i) => newKeys.has(itemKey(i))).length;
+  target.classList.toggle("has-late", late > 0);
+  target.classList.toggle("has-new", fresh > 0);
+  const summary = [late ? `${late} late` : "", soon ? `${soon} coming up` : ""].filter(Boolean).join(" · ");
+  const toggle = el("button", { className: "coming-up-toggle", attrs: { type: "button", "aria-expanded": String(comingUpOpen), "aria-controls": "comingUpBody" } }, [
+    el("span", { className: "coming-up-title", text: comingUpData.audience === "you" ? "Your compliance dates" : "Compliance dates for your company" }),
+    fresh ? el("span", { className: "new-pill", text: `${fresh} new` }) : null,
+    el("span", { className: "coming-up-summary", text: summary }),
+    el("span", { className: "coming-up-chevron", attrs: { "aria-hidden": "true" } })
+  ]);
+  toggle.addEventListener("click", () => {
+    // Closing the list is what says "I have seen these": the New marks go.
+    if (comingUpOpen) markAllSeen();
+    comingUpOpen = !comingUpOpen;
+    renderComingUp();
+  });
+  target.append(toggle);
+  if (!comingUpOpen) {
+    scheduleFit();
+    return;
+  }
+  const body = el("div", { className: "coming-up-body", attrs: { id: "comingUpBody" } });
+  // New items first, in a group of their own, so a fresh task is the first
+  // thing in the list and never sits below the fold.
+  const isFresh = (i) => newKeys.has(itemKey(i));
+  const groups = [{ key: "new", title: "New" }, ...COMING_UP_GROUPS];
+  for (const group of groups) {
+    const rows = items
+      .filter((i) => (group.key === "new" ? isFresh(i) : i.group === group.key && !isFresh(i)))
+      .sort((a, b) => a.days - b.days);
+    if (!rows.length) continue;
+    const list = el("ul", { className: "coming-up-list" });
+    for (const item of rows.slice(0, SHOWN_PER_GROUP)) {
+      const label = `${clean(item.label, 32)} · ${clean(item.what, 40)}`;
+      const isNew = newKeys.has(itemKey(item));
+      const row = el("button", { className: `coming-up-row${item.days < 0 ? " late" : ""}${isNew ? " new" : ""}`, attrs: { type: "button", title: `Open ${clean(item.label, 32)} in Compliance Everywhere` } }, [
+        isNew ? el("span", { className: "new-pill", text: "New" }) : null,
+        el("span", { className: "coming-up-label", text: label }),
+        el("span", { className: "coming-up-when", text: `${dueWhen(item.days)} · ${shortDate(item.due)}` }),
+        el("span", { className: "coming-up-go", attrs: { "aria-hidden": "true" } })
+      ]);
+      row.addEventListener("click", () => openUrl(itemUrl(item)).catch((error) => console.error(error)));
+      list.append(el("li", {}, [row]));
+    }
+    const more = rows.length - SHOWN_PER_GROUP;
+    body.append(el("section", { className: "coming-up-group" }, [
+      el("h3", { text: group.title }),
+      list,
+      more > 0 ? el("p", { className: "coming-up-more", text: `${more} more in Compliance Everywhere` }) : null
+    ]));
+  }
+  const open = el("button", { className: "secondary-action coming-up-open", text: "Open in Compliance Everywhere", attrs: { type: "button" } });
+  open.addEventListener("click", () => openUrl(COMING_UP_URL).catch((error) => console.error(error)));
+  body.append(el("div", { className: "coming-up-foot" }, [
+    el("p", { text: "Details open in your browser, where you sign in." }),
+    open
+  ]));
+  target.append(body);
+  scheduleFit();
+}
+
+// Reads what the background agent saved (no network). `fresh` asks the
+// service first, after "Check again".
+async function loadComingUp({ fresh = false } = {}) {
+  if (!connection?.paired) {
+    comingUpData = null;
+    renderComingUp();
+    refreshWebFilterView();
+    return;
+  }
+  try {
+    const data = DEMO
+      ? { available: true, audience: "company", days: 30, items: [...DEMO_ITEMS, ...demoExtra], required: [] }
+      : await invoke(fresh ? "refresh_due" : "due_soon");
+    if (data && Array.isArray(data.items)) {
+      data.items = data.items.map((item) => ({ ...item, days: daysUntil(item.due) }));
+    }
+    comingUpData = data;
+  } catch (error) {
+    console.error("Compliance Agent could not load the coming-up dates", error);
+    // Keep what is on screen: a failed read is not "nothing is due".
+  }
+  refreshWebFilterView();
+  const items = Array.isArray(comingUpData?.items) ? comingUpData.items : [];
+  const seen = readStored(SEEN_KEY, null);
+  if (!Array.isArray(seen)) {
+    writeStored(SEEN_KEY, items.map(itemKey));
+  } else {
+    const seenSet = new Set(seen);
+    const fresh = items.filter((i) => !seenSet.has(itemKey(i)) && !newKeys.has(itemKey(i)));
+    fresh.forEach((i) => newKeys.add(itemKey(i)));
+
+  }
+  renderComingUp();
+}
+
+// ------------------------------------------------------------------ web filtering
+//
+// Shown only when the workspace has ISO 27001 on (the service says so with
+// `required: ["web_filtering"]`). The check itself is read-only. The change
+// happens only when the person presses "Run it for me" after reading the
+// exact command; it is never made, or made again, on its own.
+
+let webFilterPlan = null;
+let webFilterBusy = false;
+
+// Redraws the checks with the latest web filtering state (the headline
+// depends on it, so the whole result is drawn again).
+function refreshWebFilterView() {
+  if (currentResult) renderResult(currentResult);
+  else renderWebFilter();
+}
+
+function webFilterState() {
+  const wf = comingUpData?.web_filtering;
+  if (!connection?.paired || !wf?.required) return null;
+  return wf.status?.state || "unknown";
+}
+
+async function loadWebFilterPlan() {
+  if (DEMO) return null;
+  try {
+    webFilterPlan = await invoke("web_filter_plan");
+  } catch (error) {
+    console.error("Compliance Agent could not read how to turn on web filtering", error);
+  }
+  return webFilterPlan;
+}
+
+function renderWebFilter() {
+  const posture = $("#posture");
+  posture.querySelector('[data-key="web_filtering"]')?.remove();
+  const state = webFilterState();
+  if (!state || !currentResult) return;
+  // Off is a setting that needs attention, so the headline must not say
+  // "protected" above a red row.
+  if (state === "off" && shell.classList.contains("protected")) {
+    setTone("attention");
+    $("#headline").textContent = "One setting needs attention";
+    $("#description").textContent = "Web filtering is off. Everything else on this device is protected.";
+  }
+  const pill = { on: "Passing", off: "Off", unknown: "Not checked" }[state] || "Not checked";
+  const tone = { on: "pass", off: "fail" }[state] || "unknown";
+  const detail = clean(comingUpData.web_filtering.status?.detail, 200) || "We couldn't check web filtering yet.";
+  const lines = [el("li", { className: `line ${tone === "pass" ? "ok" : tone === "fail" ? "fail" : "warn"}`, text: detail })];
+  if (state === "off") {
+    lines.push(el("li", { className: "line info", text: "Web filtering stops this computer from opening sites known to spread malware or phishing. Your company's ISO 27001 asks for it on every work computer." }));
+  }
+  if (state === "on" && webFilterPlan?.turned_on_by_agent && webFilterPlan.turned_on_at) {
+    lines.push(el("li", { className: "line info", text: `Turned on by you with Compliance Agent, ${friendlyTime(new Date(webFilterPlan.turned_on_at))}.` }));
+  }
+  const result = el("div", { className: "result" }, [el("ul", { className: "detail-lines" }, lines)]);
+  const actions = el("div", { className: "webfilter-actions" });
+  if (state === "off") {
+    actions.append(actionButton("Turn on web filtering", openWebFilterDialog, "check-action"));
+  } else if (state === "on" && webFilterPlan?.turned_on_by_agent) {
+    actions.append(actionButton("Undo web filtering", openWebFilterUndo));
+  }
+  if (actions.children.length) result.append(actions);
+  const head = el("div", { className: "finding-title" }, [el("strong", { text: "Web filtering" }), el("span", { className: "status-pill", text: pill })]);
+  posture.append(el("article", { className: `finding ${tone}`, attrs: { "data-key": "web_filtering" } }, [head, result]));
+  // The plan says whether Undo is possible; read it once, then show again.
+  if (!webFilterPlan && !webFilterBusy) {
+    webFilterBusy = true;
+    loadWebFilterPlan().finally(() => {
+      webFilterBusy = false;
+      if (webFilterPlan) renderWebFilter();
+    });
+  }
+}
+
+const SYSTEM_NAME = navigator.userAgent.includes("Windows") ? "Windows" : navigator.userAgent.includes("Mac") ? "macOS" : "Linux";
+
+function webFilterDialogState({ title, nodes = [], actions = [], locked = false }) {
+  const dialog = $("#webFilterDialog");
+  dialog.dataset.locked = locked ? "true" : "false";
+  $("#webFilterTitle").textContent = title;
+  $("#webFilterBody").replaceChildren(...nodes);
+  $("#webFilterActions").replaceChildren(...actions);
+}
+
+async function copyText(text, status) {
+  try {
+    await navigator.clipboard.writeText(text);
+    status.textContent = "Copied";
+  } catch {
+    status.textContent = "Couldn't copy. Select the command and copy it.";
+  }
+}
+
+async function openWebFilterDialog() {
+  const dialog = $("#webFilterDialog");
+  webFilterDialogState({ title: "Turn on web filtering?", nodes: [el("p", { className: "modal-loading", text: "Reading this computer's network settings…" })] });
+  openModal(dialog);
+  const plan = await loadWebFilterPlan();
+  const why = el("div", { className: "webfilter-why" }, [
+    el("strong", { text: "What web filtering is, and why" }),
+    el("span", { text: "Every time you open a website, your computer first asks a lookup service (DNS) where that site lives. A filtering DNS refuses to answer for sites known to spread malware or phishing, so a bad link does not open. Your company runs ISO 27001, which asks for this on every work computer (control A.8.23, web filtering)." })
+  ]);
+  if (!plan || !plan.supported) {
+    const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+    webFilterDialogState({
+      title: "Turn on web filtering",
+      nodes: [
+        why,
+        el("p", { text: "Compliance Agent can't change the DNS on this computer, so here is how to do it yourself. The check sees the change on its own." }),
+        el("ol", {}, steps.map((step) => el("li", { text: clean(step, 200) })))
+      ],
+      actions: [actionButton("Close", () => closeModal(dialog), "check-action")]
+    });
+    return;
+  }
+  // Line breaks and indentation are part of the command; only control
+  // characters go.
+  // eslint-disable-next-line no-control-regex
+  const command = (plan.commands || []).flatMap((block) => String(block).split("\n")).map((line) => line.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 300)).join("\n");
+  const status = el("span", { className: "modal-status", attrs: { role: "status" } });
+  const note = plan.prompt === "none"
+    ? "Compliance Agent already runs with administrator rights on this computer, so the change happens as soon as you press Run it for me. Rather do it yourself? Copy the command and run it in PowerShell as administrator; the check sees it either way."
+    : `Next, ${SYSTEM_NAME} asks for your password. Rather do it yourself? Copy the commands and run them as an administrator; the check sees it either way.`;
+  webFilterDialogState({
+    title: "Turn on web filtering?",
+    nodes: [
+      why,
+      el("p", { text: "Compliance Agent can turn it on for you. It changes one setting and nothing else." }),
+      el("ul", {}, [
+        el("li", { text: `Sets the DNS of ${clean(plan.applies, 120) || "your network"} to Cloudflare's malware filter.` }),
+        el("li", { text: "Saves your current DNS first, so Undo puts it back exactly." }),
+        el("li", { text: plan.method === "linux-networkmanager" ? "Your network reconnects for a second. No restart." : "Works right away. No restart." })
+      ]),
+      el("h3", { text: "The exact command it runs" }),
+      el("pre", { className: "webfilter-command", text: command }),
+      el("p", { className: "webfilter-note", text: note })
+    ],
+    actions: [
+      status,
+      actionButton("Copy command", () => copyText(command, status)),
+      actionButton("Cancel", () => closeModal(dialog)),
+      actionButton("Run it for me", () => setWebFilter(true), "check-action")
+    ]
+  });
+}
+
+function openWebFilterUndo() {
+  const dialog = $("#webFilterDialog");
+  const applies = clean(webFilterPlan?.applies, 120) || "your network";
+  webFilterDialogState({
+    title: "Undo web filtering?",
+    nodes: [
+      el("p", { text: `This puts back the DNS servers ${applies} had before Compliance Agent turned on web filtering.` }),
+      el("p", { text: "Your company's ISO 27001 asks for web filtering on every work computer, so this laptop will show it as off." })
+    ],
+    actions: [
+      actionButton("Cancel", () => closeModal(dialog)),
+      actionButton("Undo web filtering", () => setWebFilter(false), "check-action")
+    ]
+  });
+  openModal(dialog);
+}
+
+async function setWebFilter(on) {
+  const dialog = $("#webFilterDialog");
+  webFilterDialogState({
+    title: on ? "Turning on web filtering…" : "Undoing web filtering…",
+    nodes: [el("p", { text: SYSTEM_NAME === "Windows" ? "This takes a few seconds." : `${SYSTEM_NAME} may ask for your password.` })],
+    locked: true
+  });
+  try {
+    const result = await invoke("set_web_filter", { on });
+    if (result?.plan) webFilterPlan = result.plan;
+    if (comingUpData?.web_filtering && result?.status) comingUpData.web_filtering.status = result.status;
+    dialog.dataset.locked = "false";
+    closeModal(dialog);
+    refreshWebFilterView();
+  } catch (error) {
+    console.error("Compliance Agent could not change web filtering", error);
+    webFilterDialogState({
+      title: on ? "Web filtering was not turned on" : "Web filtering was not undone",
+      nodes: [el("p", { className: "modal-error", text: `${errorText(error)} Nothing else was changed.` })],
+      actions: [actionButton("Close", () => closeModal(dialog), "check-action")]
+    });
+  }
+}
+
+// ------------------------------------------------------------------ settings
+
+// One switch: "Notify me about new tasks". It lives with the background
+// agent, which sends the notification and lights up the taskbar; the window
+// only reads and writes it. The status line says what the system allows.
+const SYSTEM_STATUS = {
+  on: ["ok", "Notifications are allowed for Compliance Agent on this computer."],
+  off_by_user: ["warn", "Notifications for Compliance Agent are turned off in your system settings, so only the taskbar lights up."],
+  off_by_policy: ["warn", "Your organization turned off notifications on this computer, so only the taskbar lights up."],
+  unknown: ["", "This computer does not say whether it allows notifications."]
+};
+
+async function openSettings() {
+  $("#sendTestTask").hidden = !DEMO;
+  const box = $("#settingNotify");
+  const status = $("#notificationStatus");
+  openModal($("#settingsDialog"));
+  try {
+    const current = DEMO ? { enabled: box.checked, system: "on" } : await invoke("notification_settings");
+    box.checked = current.enabled !== false;
+    const [tone, text] = SYSTEM_STATUS[current.system] || SYSTEM_STATUS.unknown;
+    status.className = `setting-status ${tone}`;
+    status.textContent = text;
+  } catch (error) {
+    console.error("Compliance Agent could not read the notification setting", error);
+    status.className = "setting-status warn";
+    status.textContent = "We couldn't read this setting. Close and reopen Compliance Agent.";
+  }
+}
+
+$("#settingNotify").addEventListener("change", async (event) => {
+  try {
+    if (!DEMO) await invoke("set_notifications", { enabled: event.target.checked });
+  } catch (error) {
+    console.error("Compliance Agent could not save the notification setting", error);
+    event.target.checked = !event.target.checked;
+    $("#notificationStatus").className = "setting-status warn";
+    $("#notificationStatus").textContent = "We couldn't save this setting. Try again.";
+  }
+});
+
 function setTone(tone) {
   shell.classList.toggle("needs-attention", tone === "attention" || tone === "failed");
   shell.classList.toggle("needs-verification", tone === "verify");
@@ -192,6 +656,7 @@ function renderResult(result) {
   // A sent report already states its time; do not print the time twice.
   $("#checkedAt").hidden = delivery?.tone === "ok";
   $("#posture").replaceChildren(...summary.rows.map((row) => renderRow(row, summary.platform)));
+  renderWebFilter();
   renderDashboard(summary.server);
 }
 
@@ -252,6 +717,10 @@ function setLaunchState({ title, description, failed = false, visible = true }) 
 // ------------------------------------------------------------------ checks
 
 async function loadConnection() {
+  if (DEMO) {
+    renderConnection({ paired: true, person_name: "Ryan Nathanael Cruz Barragan", workspace_name: "hackzero (demo data)" });
+    return true;
+  }
   try {
     renderConnection(await invoke("connection_status"));
     return true;
@@ -334,7 +803,80 @@ function syncInstallButton() {
   if (availableUpdate && !installingUpdate) install.textContent = `Install v${clean(availableUpdate.version, 40)}`;
 }
 
-async function checkForUpdate({ quiet = false } = {}) {
+// When the agent starts (first open, after a full quit, at sign-in), a waiting
+// update installs on its own on Windows, where the app already has
+// administrator rights. While the agent runs, a found update opens the update
+// window, bringing the window back from the tray if it was closed. "Remind me
+// tomorrow" or the X hides it for 24 hours; then one notification, and the
+// update window again. There is no "skip this version". macOS and Linux ask
+// for a password to install, so there the update window shows at start too.
+const REMIND_KEY = "ca:update-remind";
+const REMIND_AFTER = 24 * 60 * 60 * 1000;
+let appVersion = "";
+
+async function offerUpdate(update, { startup = false, manual = false } = {}) {
+  if (!update || installingUpdate || $("#updateDialog").open) return;
+  if (startup && (await mayInstallUnattended(update.version))) {
+    await updateAction();
+    return;
+  }
+  const remind = readStored(REMIND_KEY, null);
+  const reminded = remind && remind.version === update.version;
+  if (!startup && !manual && reminded && Date.now() - remind.at < REMIND_AFTER) return;
+  if (!startup && !manual && reminded && !remind.told) {
+    // The day is over: one notification, then the update window.
+    writeStored(REMIND_KEY, { ...remind, told: true });
+    try {
+      await invoke("notify_update", { version: update.version });
+    } catch (error) {
+      console.error("Compliance Agent could not show the update reminder", error);
+    }
+  }
+  await showUpdateWindow(update);
+}
+
+function setUpdateStatus(text, failed = false) {
+  const status = $("#updateStatus");
+  status.textContent = text;
+  status.classList.toggle("fail", failed);
+}
+
+async function showUpdateWindow(update) {
+  if (!appVersion) {
+    try {
+      appVersion = await getVersion();
+    } catch {
+      appVersion = "";
+    }
+  }
+  $("#updateTitle").textContent = `Compliance Agent ${clean(update.version, 40)} is available`;
+  $("#updateSub").textContent = appVersion ? `You have version ${clean(appVersion, 40)}.` : "";
+  // Plain text only: each note becomes one <p> through textContent.
+  $("#updateNotes").replaceChildren(...parseReleaseNotes(update.body).map((note) => el("p", { text: note })));
+  setUpdateStatus("Takes about a minute.");
+  $("#updateInstall").disabled = false;
+  $("#updateRemind").disabled = false;
+  if (document.visibilityState !== "visible") {
+    try {
+      await invoke("show_window");
+    } catch (error) {
+      console.error("Compliance Agent could not open its window for the update", error);
+    }
+  }
+  setOptionsOpen(false);
+  const dialog = $("#updateDialog");
+  if (!dialog.open) dialog.showModal();
+  $("#updateInstall").focus();
+}
+
+function remindTomorrow() {
+  if (installingUpdate) return;
+  if (availableUpdate) writeStored(REMIND_KEY, { version: availableUpdate.version, at: Date.now(), told: false });
+  const dialog = $("#updateDialog");
+  if (dialog.open) dialog.close();
+}
+
+async function checkForUpdate({ quiet = false, startup = false, manual = false } = {}) {
   if (installingUpdate) return;
   const target = $("#updateState");
   const again = $("#checkUpdates");
@@ -359,7 +901,7 @@ async function checkForUpdate({ quiet = false } = {}) {
     again.disabled = false;
     syncInstallButton();
   }
-  if (availableUpdate && (await mayInstallUnattended(availableUpdate.version))) await updateAction();
+  if (availableUpdate) await offerUpdate(availableUpdate, { startup, manual });
 }
 
 // Updates install themselves on Windows, where the app already runs with
@@ -395,9 +937,13 @@ async function updateAction() {
   installingUpdate = true;
   install.disabled = true;
   install.textContent = "Downloading…";
+  $("#updateInstall").disabled = true;
+  $("#updateRemind").disabled = true;
+  setUpdateStatus("Downloading. Compliance Agent restarts when it is done.");
   try {
     await availableUpdate.downloadAndInstall();
     install.textContent = "Restarting…";
+    setUpdateStatus("Restarting…");
     await relaunch();
   } catch (error) {
     console.error("Compliance Agent update install failed", error);
@@ -405,6 +951,9 @@ async function updateAction() {
     install.disabled = false;
     install.textContent = `Try installing v${clean(availableUpdate.version, 40)} again`;
     $("#updateState").textContent = "The signed update could not be installed.";
+    $("#updateInstall").disabled = false;
+    $("#updateRemind").disabled = false;
+    setUpdateStatus("The update could not be installed. Try again.", true);
   }
 }
 
@@ -593,7 +1142,10 @@ async function runUninstall() {
 
 // ------------------------------------------------------------------ wiring
 
-$("#checkAgain").addEventListener("click", () => refresh());
+$("#checkAgain").addEventListener("click", async () => {
+  await refresh();
+  await loadComingUp({ fresh: true });
+});
 $("#posture").addEventListener("click", (event) => {
   const details = event.target.closest("[data-details]");
   if (details) {
@@ -614,8 +1166,19 @@ $("#installUpdate").addEventListener("click", updateAction);
 $("#checkUpdates").addEventListener("click", (event) => {
   // Stay open so the result shows next to the item.
   event.stopPropagation();
-  checkForUpdate();
+  checkForUpdate({ manual: true });
 });
+// The update window: Install, or Remind me tomorrow (the X and Esc do the
+// same). A click on the backdrop does nothing, so it is never dismissed by
+// accident.
+$("#updateInstall").addEventListener("click", updateAction);
+$("#updateRemind").addEventListener("click", remindTomorrow);
+$("#updateClose").addEventListener("click", remindTomorrow);
+$("#updateDialog").addEventListener("cancel", (event) => {
+  event.preventDefault();
+  remindTomorrow();
+});
+wireModal($("#webFilterDialog"));
 
 // Options: one quiet menu for everything that is not the main action.
 function setOptionsOpen(open) {
@@ -635,6 +1198,17 @@ document.addEventListener("keydown", (event) => {
   }
 });
 $("#openDiagnostics").addEventListener("click", openDiagnostics);
+$("#openSettings").addEventListener("click", openSettings);
+$("#sendTestTask").addEventListener("click", () => {
+  // Five seconds, so there is time to switch to another window and see the
+  // taskbar light up.
+  closeModal($("#settingsDialog"));
+  window.setTimeout(() => {
+    demoAddTask();
+    loadComingUp();
+  }, 5000);
+});
+wireModal($("#settingsDialog"));
 $("#copyDiagnostics").addEventListener("click", copyDiagnostics);
 $("#uninstallDeviceChecker").addEventListener("click", () => {
   showUninstallConfirm();
@@ -691,14 +1265,28 @@ listen("window-shown", () => {
   scheduleReload();
   if (Date.now() - lastUpdateCheck > UPDATE_CHECK_EVERY) checkForUpdate({ quiet: true });
 });
+// The background agent refreshed the dates (every 15 minutes, and after wake).
+listen("due-updated", () => loadComingUp());
 window.addEventListener("focus", scheduleReload);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") scheduleReload();
+  // Closing the window to the tray while the update window is open counts as
+  // "Remind me tomorrow", so it does not pop up again within the hour.
+  else if ($("#updateDialog").open) remindTomorrow();
 });
 window.setInterval(() => checkForUpdate({ quiet: true }), UPDATE_CHECK_EVERY);
 
 (async () => {
-  checkForUpdate();
   await loadConnection();
   await refresh({ initial: true });
+  await loadComingUp();
+  // After the launch check, so a waiting update installs from a settled app.
+  checkForUpdate({ startup: true });
+  window.setInterval(() => loadComingUp(), DEMO ? 4000 : COMING_UP_EVERY);
+  if (DEMO) {
+    window.setTimeout(() => {
+      demoAddTask();
+      loadComingUp();
+    }, 20000);
+  }
 })();
