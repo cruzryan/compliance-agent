@@ -295,9 +295,18 @@ func webFilterCommand(args []string) {
 		if err != nil {
 			failJSON("webfilter_failed", err.Error(), 1)
 		}
-		// The new DNS needs a moment before the check sees it.
-		time.Sleep(1500 * time.Millisecond)
-		status := webfilter.Check(context.Background())
+		// The new DNS needs a moment before the check sees it: the first
+		// encrypted (DNS over HTTPS) lookup opens a connection, and until it
+		// answers a check reads "unknown" (found by the webfilter-windows CI
+		// job, 23 Nov 2026). Ask again for up to about 20 seconds.
+		status := webfilter.Status{State: webfilter.StateUnknown}
+		for start := time.Now(); time.Since(start) < 20*time.Second; {
+			time.Sleep(time.Second)
+			status = webfilter.Check(context.Background())
+			if (args[0] == "on" && status.State == webfilter.StateOn) || (args[0] == "off" && status.State != webfilter.StateUnknown) {
+				break
+			}
+		}
 		if args[0] == "on" {
 			_, _ = webfilter.Watch(dir, status)
 		}

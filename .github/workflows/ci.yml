@@ -112,8 +112,17 @@ jobs:
         shell: pwsh
         run: |
           $out = .\dc.exe webfilter on
-          $out
           $r = $out | ConvertFrom-Json
+          "on: ok=$($r.ok) state=$($r.status.state) detail=$($r.status.detail)"
+          if ($r.status.state -ne 'on') {
+            "== diagnostics"
+            Get-DnsClientServerAddress | Format-Table InterfaceAlias, AddressFamily, ServerAddresses -AutoSize
+            Get-DnsClientDohServerAddress -ServerAddress 1.1.1.2, 1.0.0.2 | Format-Table -AutoSize
+            Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters" -Recurse -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) $((Get-ItemProperty $_.PSPath).DohFlags)" }
+            foreach ($n in 'malware.testcategory.com', 'example.com') { try { "$n -> " + ((Resolve-DnsName $n -Type A -ErrorAction Stop | Where-Object IPAddress).IPAddress -join ',') } catch { "$n -> $($_.Exception.Message)" } }
+            try { "direct 1.1.1.2 -> " + ((Resolve-DnsName malware.testcategory.com -Server 1.1.1.2 -DnsOnly -ErrorAction Stop | Where-Object IPAddress).IPAddress -join ',') } catch { "direct -> $($_.Exception.Message)" }
+            try { "https to 1.1.1.2:443 -> " + (Test-NetConnection 1.1.1.2 -Port 443).TcpTestSucceeded } catch {}
+          }
           if (-not $r.ok -or $r.status.state -ne 'on') { throw "web filtering did not turn on: $($r.status.state)" }
           Get-DnsClientDohServerAddress -ServerAddress 1.1.1.2, 1.0.0.2 | Format-Table -AutoSize
           foreach ($e in Get-DnsClientDohServerAddress -ServerAddress 1.1.1.2, 1.0.0.2) {
