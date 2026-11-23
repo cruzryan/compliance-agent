@@ -226,12 +226,22 @@ func TurnOn(dir string) error {
 	}
 	// Keep the oldest backup: pressing the button twice must not save the
 	// filter's own servers as "what was there before".
+	newBackup := false
 	if _, statErr := os.Stat(backupPath(dir)); statErr != nil {
 		if err := writeFileAtomic(backupPath(dir), backup); err != nil {
 			return err
 		}
+		newBackup = true
 	}
 	if err := applyFilter(); err != nil {
+		// A change that stopped halfway is put back at once, never left in
+		// place: the person was told it did not work. Only where no password
+		// is asked (Windows): elsewhere a failure is usually a cancelled
+		// password prompt, which changed nothing, and asking again would be
+		// a second prompt for nothing.
+		if newBackup && plan.Prompt == "none" && restoreServers(backup) == nil {
+			_ = os.Remove(backupPath(dir))
+		}
 		return err
 	}
 	now := time.Now().UTC()

@@ -13,8 +13,11 @@ import (
 )
 
 // The adapters changed: every physical adapter that is up (Wi-Fi and
-// Ethernet). Virtual adapters (VPN, Hyper-V, WSL) keep their own DNS.
-const adapters = `Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.HardwareInterface }`
+// Ethernet) and has DNS settings of its own. Virtual adapters (VPN, Hyper-V,
+// WSL) keep their own DNS. A card bonded under another one (an accelerated
+// networking card on a cloud machine) has no DNS settings, and Windows refuses
+// to set them (found by the webfilter-windows CI job, 23 Nov 2026).
+const adapters = `Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.HardwareInterface -and (Get-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue) }`
 
 // The filter's servers and its encrypted (DNS over HTTPS) address, as
 // PowerShell. Cloudflare publishes security.cloudflare-dns.com for 1.1.1.2.
