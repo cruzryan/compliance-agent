@@ -136,8 +136,13 @@ func planOS() Plan {
 	}
 }
 
+// powershell runs a script and returns what it printed. Progress records
+// ("Preparing modules for first use") are turned off and the error stream is
+// read apart: both used to arrive mixed into the output as "#< CLIXML", so the
+// saved settings could not be read and the button failed on Windows (found by
+// the webfilter-windows CI job, 23 Nov 2026).
 func powershell(script string, env ...string) (string, error) {
-	units := utf16.Encode([]rune(script))
+	units := utf16.Encode([]rune("$ProgressPreference = 'SilentlyContinue'\n" + script))
 	raw := make([]byte, 0, len(units)*2)
 	for _, u := range units {
 		raw = append(raw, byte(u), byte(u>>8))
@@ -145,15 +150,38 @@ func powershell(script string, env ...string) (string, error) {
 	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(raw))
 	command.Env = append(os.Environ(), env...)
 	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	output, err := command.CombinedOutput()
-	text := strings.TrimSpace(string(output))
+	var stdout, stderr strings.Builder
+	command.Stdout, command.Stderr = &stdout, &stderr
+	err := command.Run()
 	if err != nil {
+		text := cleanErrorText(stderr.String())
+		if text == "" {
+			text = strings.TrimSpace(stdout.String())
+		}
 		if text == "" {
 			text = err.Error()
 		}
 		return "", errors.New("Windows could not change the DNS: " + firstLine(text))
 	}
-	return text, nil
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// cleanErrorText turns PowerShell's error stream into its first readable line:
+// a CLIXML error record keeps its message inside <S S="Error"> elements.
+func cleanErrorText(text string) string {
+	text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "#< CLIXML"))
+	if !strings.HasPrefix(text, "<Objs") {
+		return text
+	}
+	var parts []string
+	for _, chunk := range strings.Split(text, `<S S="Error">`)[1:] {
+		line, _, _ := strings.Cut(chunk, "</S>")
+		line = strings.ReplaceAll(line, "_x000D__x000A_", " ")
+		if line = strings.TrimSpace(line); line != "" {
+			parts = append(parts, line)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func currentServers() ([]byte, error) {
