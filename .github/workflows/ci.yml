@@ -207,6 +207,7 @@ jobs:
           Get-Content $log -ErrorAction SilentlyContinue
           if (-not $told) { throw 'a broken WebView2 left the agent silent' }
           if (-not $alive) { throw 'the agent quit instead of carrying on with its checks' }
+          if (-not (Select-String -Path $log -SimpleMatch 'ERROR tauri_runtime_wry' -Quiet)) { throw 'the WebView2 error itself is not in agent.log' }
   race:
     runs-on: ubuntu-latest
     steps:

@@ -771,6 +771,11 @@ fn background_loop(app: AppHandle) {
 
 fn main() {
     let launch_in_background = std::env::args().any(|arg| arg == "--background");
+    // Before the builder: the first window is created before setup runs, and
+    // a WebView2 failure on it must reach agent.log too.
+    if let Some(dir) = agent_log::state_dir() {
+        agent_log::init(&dir);
+    }
     tauri::Builder::default()
         // A second launch focuses the resident checker instead of making
         // another scheduler/reporting process. This also prevents duplicate
@@ -786,9 +791,6 @@ fn main() {
         .manage(CollectorGate(Mutex::new(())))
         .manage(window_health::WindowHealth::new(!launch_in_background))
         .setup(move |app| {
-            if let Some(dir) = state_dirs(app.handle()).into_iter().next() {
-                agent_log::init(&dir);
-            }
             log::info!(
                 "Compliance Agent {} starting{}",
                 app.package_info().version,

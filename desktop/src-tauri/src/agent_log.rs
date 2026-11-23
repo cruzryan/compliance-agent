@@ -8,7 +8,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// The file is started over above this size, keeping one previous file.
@@ -48,6 +48,27 @@ impl log::Log for FileLog {
             let _ = file.flush();
         }
     }
+}
+
+/// The collector's state directory, the same one `state_dirs` names first,
+/// found without the app handle (the logger starts before the app exists).
+/// Tauri's config_dir is the platform config directory: %APPDATA% on
+/// Windows, ~/Library/Application Support on macOS, $XDG_CONFIG_HOME or
+/// ~/.config on Linux.
+pub fn state_dir() -> Option<PathBuf> {
+    let base = if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join("Library").join("Application Support"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+    }?;
+    base.is_absolute()
+        .then(|| base.join("ComplianceEverywhere").join("ComplianceAgent"))
 }
 
 /// Starts writing `agent.log` in `dir`. Any failure leaves logging off: a log
