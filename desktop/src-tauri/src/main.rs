@@ -14,6 +14,9 @@ use tauri::{
     AppHandle, Emitter, Manager,
 };
 
+mod agent_log;
+mod window_health;
+
 // The Go collector communicates through captured stdout/stderr. Its short
 // checks must never create a visible console window on Windows.
 #[cfg(target_os = "windows")]
@@ -34,6 +37,9 @@ const DUE_EVERY: Duration = Duration::from_secs(15 * 60);
 /// The first dates check after launch (and so after sign-in).
 const FIRST_DUE_AFTER: Duration = Duration::from_secs(20);
 const MAX_ERROR_CHARS: usize = 300;
+/// While no window could be opened, the process looks for an update itself
+/// this often (the window's own updater cannot run).
+const UPDATE_WITHOUT_WINDOW_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// The ONLY collector invocations this app can make. Every argument is fixed
 /// here; no UI value ever becomes an argument or a shell command.
@@ -53,6 +59,7 @@ enum Collector {
     NotifyOn,
     NotifyOff,
     NotifyUpdate,
+    NotifyWindowFailed,
     WebFilterStatus,
     WebFilterPlan,
     WebFilterOn,
@@ -76,6 +83,7 @@ impl Collector {
             Collector::NotifyOn => &["notify-settings", "on"],
             Collector::NotifyOff => &["notify-settings", "off"],
             Collector::NotifyUpdate => &["notify-update"],
+            Collector::NotifyWindowFailed => &["notify-window-failed"],
             Collector::WebFilterStatus => &["webfilter", "status"],
             Collector::WebFilterPlan => &["webfilter", "plan"],
             Collector::WebFilterOn => &["webfilter", "on"],
@@ -410,6 +418,55 @@ async fn notify_update(app: AppHandle, version: String) -> Result<Value, String>
     .await
 }
 
+/// The page loaded and can talk to this process. Without it within 30
+/// seconds, the window is treated as broken (window_health).
+#[tauri::command]
+fn window_ready(app: AppHandle, window: tauri::WebviewWindow) {
+    window_health::mark_ready(&app, window.label());
+}
+
+/// Tells the person, once, that no window could be opened.
+pub(crate) fn notify_window_failed(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Err(error) = run_collector(&app, Collector::NotifyWindowFailed, &[]) {
+            log::error!("could not show the window-failed notification: {error}");
+        }
+    });
+}
+
+/// With no window, its updater never runs, so a fix could never arrive. On an
+/// installed Windows build (where updates already install unattended, with no
+/// prompt) this process checks and installs the update itself.
+pub(crate) fn update_without_window(app: &AppHandle) {
+    if cfg!(debug_assertions) || !cfg!(target_os = "windows") {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_updater::UpdaterExt;
+        let updater = match app.updater() {
+            Ok(updater) => updater,
+            Err(error) => {
+                log::error!("updater unavailable without a window: {error}");
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => {
+                log::warn!("installing {} without a window", update.version);
+                if let Err(error) = update.download_and_install(|_, _| {}, || {}).await {
+                    log::error!("update {} failed without a window: {error}", update.version);
+                } else {
+                    app.restart();
+                }
+            }
+            Ok(None) => log::info!("no update waiting"),
+            Err(error) => log::warn!("update check without a window failed: {error}"),
+        }
+    });
+}
+
 /// Brings the window back from the tray (the update window opens in it).
 #[tauri::command]
 fn show_window(app: AppHandle) {
@@ -634,11 +691,10 @@ fn quit_app(app: AppHandle) {
 }
 
 fn show_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
+    // Shows the window in use, or, when its page has not loaded (WebView2
+    // failed to start), shows it once it has and tries again if recovery
+    // already gave up. Never a silent click.
+    window_health::request_show(app);
     // The page reloads the last saved result (a background tick may have run
     // while it was hidden) and re-checks for app updates if due.
     let _ = app.emit("window-shown", ());
@@ -678,6 +734,7 @@ fn background_loop(app: AppHandle) {
     let mut last_wall = SystemTime::now();
     let mut next_tick = last_wall + BACKGROUND_EVERY;
     let mut next_due = last_wall + FIRST_DUE_AFTER;
+    let mut next_update = last_wall + UPDATE_WITHOUT_WINDOW_EVERY;
     loop {
         std::thread::sleep(BACKGROUND_POLL);
         let now = SystemTime::now();
@@ -703,6 +760,12 @@ fn background_loop(app: AppHandle) {
             next_due = SystemTime::now() + DUE_EVERY;
             due_tick(&app);
         }
+        if now >= next_update {
+            next_update = now + UPDATE_WITHOUT_WINDOW_EVERY;
+            if window_health::is_failed(&app) {
+                update_without_window(&app);
+            }
+        }
     }
 }
 
@@ -721,7 +784,16 @@ fn main() {
             Some(vec!["--background"]),
         ))
         .manage(CollectorGate(Mutex::new(())))
+        .manage(window_health::WindowHealth::new(!launch_in_background))
         .setup(move |app| {
+            if let Some(dir) = state_dirs(app.handle()).into_iter().next() {
+                agent_log::init(&dir);
+            }
+            log::info!(
+                "Compliance Agent {} starting{}",
+                app.package_info().version,
+                if launch_in_background { " at sign-in (--background)" } else { "" }
+            );
             // The manifest prompts before this in a normal Windows build. This
             // prevents a malformed launcher from ever presenting partial
             // posture as a legitimate assessment.
@@ -732,7 +804,7 @@ fn main() {
             let show = MenuItem::with_id(app, "show", "Open Compliance Agent", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id(window_health::TRAY_ID)
                 // An explicit icon is required: without it Windows can create
                 // an empty/invisible tray entry during development.
                 .icon(app.default_window_icon().expect("application icon is bundled").clone())
@@ -755,10 +827,13 @@ fn main() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     if let Err(error) = start_at_sign_in(&handle) {
-                        eprintln!("Compliance Agent could not set itself to start at sign-in: {error}");
+                        log::error!("could not set itself to start at sign-in: {error}");
                     }
                 });
             }
+            // The window must say its page loaded; if it never does, a new one
+            // is built and, failing that, the person is told.
+            window_health::watch(app.handle());
             let handle = app.handle().clone();
             std::thread::spawn(move || background_loop(handle));
             Ok(())
@@ -788,7 +863,8 @@ fn main() {
             web_filter_status,
             set_web_filter,
             notify_update,
-            show_window
+            show_window,
+            window_ready
         ])
         .run(tauri::generate_context!())
         .expect("Tauri application error");

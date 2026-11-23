@@ -65,6 +65,8 @@ func main() {
 		notifySettings(os.Args[2:])
 	case "notify-update":
 		notifyUpdate(os.Args[2:])
+	case "notify-window-failed":
+		notifyWindowFailed()
 	case "due":
 		dueCommand(os.Args[2:])
 	case "webfilter":
@@ -75,7 +77,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: device-checker <status|report|run [--once]|last|diagnose|pair|connection|disconnect|due [--cached]|webfilter <status|plan|on|off>|notify-settings [on|off]|notify-update --version V>")
+	fmt.Fprintln(os.Stderr, "usage: device-checker <status|report|run [--once]|last|diagnose|pair|connection|disconnect|due [--cached]|webfilter <status|plan|on|off>|notify-settings [on|off]|notify-update --version V|notify-window-failed>")
 	os.Exit(2)
 }
 

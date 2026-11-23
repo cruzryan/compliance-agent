@@ -320,6 +320,18 @@ func webFilterCommand(args []string) {
 
 var releaseVersion = regexp.MustCompile(`^\d{1,4}\.\d{1,4}\.\d{1,6}$`)
 
+// notifyWindowFailed tells the person, once per launch, that the window could
+// not be opened. The app keeps checking and reporting without it, but a person
+// must never be left with a tray icon that silently does nothing when clicked
+// (Cuau's laptop, 22 Nov 2026: WebView2 failed to start right after a Windows
+// Update restart, and the agent sat tray-only for 29 hours).
+func notifyWindowFailed() {
+	printJSON(notify.Alert(
+		"Compliance Agent couldn't open its window",
+		"It still checks this computer and sends reports. Restart your computer to fix the window. If it keeps happening, reinstall Compliance Agent.",
+	))
+}
+
 // notifyUpdate shows the one reminder that an update is waiting, a day after
 // the person chose "Remind me tomorrow". The window decides when.
 func notifyUpdate(args []string) {

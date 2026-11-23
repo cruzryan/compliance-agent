@@ -1,5 +1,6 @@
-version: 0.2.1
+version: 0.2.2
 
-- On Windows, turning on web filtering now uses encrypted DNS, so a router can't go around it.
-- Web filtering says when your network redirects DNS, instead of only showing Off.
-- If the test site still opens after you turn web filtering on, the agent tells you why.
+- If the window can't open at sign-in, the agent opens a new one, or tells you and keeps checking.
+- Updates still install on Windows even when the window can't open.
+- Turning on web filtering is one button, in plain words. The exact command is there if you want it.
+- The web filtering window no longer spills over its buttons.
