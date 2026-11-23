@@ -66,11 +66,11 @@ pub fn init(dir: &Path) {
     let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) else {
         return;
     };
-    if log::set_boxed_logger(Box::new(FileLog {
+    // One logger for the life of the process, so leaking it is the point.
+    let logger: &'static FileLog = Box::leak(Box::new(FileLog {
         file: Mutex::new(file),
-    }))
-    .is_ok()
-    {
+    }));
+    if log::set_logger(logger).is_ok() {
         log::set_max_level(log::LevelFilter::Info);
     }
 }
