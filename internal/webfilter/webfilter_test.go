@@ -43,6 +43,48 @@ func TestCheckUsesTheTestDomain(t *testing.T) {
 	}
 }
 
+// Prod 23 Nov 2026: the laptop's DNS was set to 1.1.1.2, but the router answered
+// every lookup itself, so the test site opened. The check must say why.
+func TestCheckSaysWhenTheNetworkRedirectsDNS(t *testing.T) {
+	oldLookup, oldFilter := lookupFn, filterLookupFn
+	t.Cleanup(func() { lookupFn, filterLookupFn = oldLookup, oldFilter })
+	real := []net.IPAddr{{IP: net.ParseIP("104.18.4.35")}}
+	lookupFn = func(context.Context, string) ([]net.IPAddr, error) { return real, nil }
+
+	cases := []struct {
+		name       string
+		filter     func(context.Context, string) ([]net.IPAddr, error)
+		redirected bool
+	}{
+		{"the filter's own address gives a real address: redirected", func(context.Context, string) ([]net.IPAddr, error) { return real, nil }, true},
+		{"the filter answers 0.0.0.0: just not set", func(context.Context, string) ([]net.IPAddr, error) { return []net.IPAddr{{IP: net.IPv4zero}}, nil }, false},
+		{"the filter can't be reached: no proof, just off", func(context.Context, string) ([]net.IPAddr, error) { return nil, errors.New("timeout") }, false},
+	}
+	for _, c := range cases {
+		filterLookupFn = c.filter
+		status := Check(context.Background())
+		if status.State != StateOff || status.Redirected != c.redirected {
+			t.Errorf("%s: got %+v", c.name, status)
+		}
+		if c.redirected && status.Detail != RedirectedDetail {
+			t.Errorf("%s: detail %q", c.name, status.Detail)
+		}
+	}
+}
+
+func TestCheckDoesNotProbeWhenFiltered(t *testing.T) {
+	oldLookup, oldFilter := lookupFn, filterLookupFn
+	t.Cleanup(func() { lookupFn, filterLookupFn = oldLookup, oldFilter })
+	lookupFn = func(context.Context, string) ([]net.IPAddr, error) { return []net.IPAddr{{IP: net.IPv4zero}}, nil }
+	filterLookupFn = func(context.Context, string) ([]net.IPAddr, error) {
+		t.Fatal("probed the filter although this computer is filtered")
+		return nil, nil
+	}
+	if s := Check(context.Background()); s.State != StateOn || s.Redirected {
+		t.Fatalf("got %+v", s)
+	}
+}
+
 func TestWatchTellsOnceWhenItIsTurnedOff(t *testing.T) {
 	dir := t.TempDir()
 	on, off := Status{State: StateOn}, Status{State: StateOff}

@@ -1,6 +1,8 @@
 // Package webfilter checks whether this computer filters malware and phishing
 // sites at DNS (ISO 27001 A.8.23, web filtering), and turns Cloudflare's
-// malware filter on or off when the person presses the button for it.
+// malware filter on or off when the person presses the button for it. On
+// Windows it is turned on as encrypted DNS (DNS over HTTPS, no fallback to
+// plain DNS), so a router that redirects plain DNS cannot bypass it.
 //
 // The check is read-only: it asks the computer's own DNS for a test domain
 // that every filtering service blocks. A filtering DNS answers 0.0.0.0 (or
@@ -42,9 +44,14 @@ const (
 
 // Status is the result of one check.
 type Status struct {
-	State     string    `json:"state"`
-	Detail    string    `json:"detail"`
-	CheckedAt time.Time `json:"checked_at"`
+	State  string `json:"state"`
+	Detail string `json:"detail"`
+	// Redirected is true when the network answers DNS questions meant for
+	// Cloudflare's filter itself, so setting the filter's servers alone
+	// changes nothing on this network (prod, 23 Nov 2026: a Totalplay router
+	// answered every lookup on port 53, whatever server Windows asked).
+	Redirected bool      `json:"redirected,omitempty"`
+	CheckedAt  time.Time `json:"checked_at"`
 }
 
 // lookupFn is swapped out by tests.
@@ -52,14 +59,55 @@ var lookupFn = func(ctx context.Context, host string) ([]net.IPAddr, error) {
 	return net.DefaultResolver.LookupIPAddr(ctx, host)
 }
 
-// Check asks this computer's DNS for the test domain.
+// filterLookupFn asks Cloudflare's filter directly over plain DNS (port 53),
+// bypassing this computer's settings. The real filter answers 0.0.0.0 for the
+// test domain; a real address means something on the network answered in its
+// place. Swapped out by tests.
+var filterLookupFn = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "udp", net.JoinHostPort(Servers4[0], "53"))
+		},
+	}
+	return resolver.LookupIPAddr(ctx, host)
+}
+
+// RedirectedDetail is what the window says when the network redirects DNS.
+const RedirectedDetail = "A known malware test site still opens: your network answers DNS lookups itself, so the filter never sees them."
+
+// Check asks this computer's DNS for the test domain. When it is not
+// filtered, it also asks the filter directly, to tell "no filter set" from
+// "the network redirects DNS".
 func Check(ctx context.Context) Status {
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	addrs, err := lookupFn(ctx, TestDomain)
 	status := classify(addrs, err)
+	if status.State == StateOff && networkRedirects(ctx) {
+		status.Redirected = true
+		status.Detail = RedirectedDetail
+	}
 	status.CheckedAt = time.Now().UTC()
 	return status
+}
+
+// networkRedirects is true only when the filter's own address gave a real
+// address for the test domain. No answer, or a blocked one, is not proof.
+func networkRedirects(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	addrs, err := filterLookupFn(ctx, TestDomain)
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		if !addr.IP.IsUnspecified() {
+			return true
+		}
+	}
+	return false
 }
 
 // classify turns a DNS answer into on, off or unknown. A timeout or a broken

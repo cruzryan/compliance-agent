@@ -16,35 +16,104 @@ import (
 // Ethernet). Virtual adapters (VPN, Hyper-V, WSL) keep their own DNS.
 const adapters = `Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.HardwareInterface }`
 
+// The filter's servers and its encrypted (DNS over HTTPS) address, as
+// PowerShell. Cloudflare publishes security.cloudflare-dns.com for 1.1.1.2.
+const filterVars = `$servers = '1.1.1.2','1.0.0.2','2606:4700:4700::1112','2606:4700:4700::1002'
+$template = 'https://security.cloudflare-dns.com/dns-query'`
+
+// Where Windows keeps one adapter's DNS over HTTPS choice for one server: the
+// same key Settings > Network > DNS over HTTPS writes. DohFlags 1 is "On
+// (automatic template)", with no fallback to plain DNS.
+const dohKey = `"HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters\$guid\DohInterfaceSettings\$(if ($s.Contains(':')) { 'Doh6' } else { 'Doh' })\$s"`
+
 // The exact command shown in the window and run by "Run it for me".
-var applyCommand = adapters + ` | ForEach-Object {
-  Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex ` + "`" + `
-    -ServerAddresses 1.1.1.2,1.0.0.2,2606:4700:4700::1112,2606:4700:4700::1002 }
+//
+// Plain DNS alone is not enough: some routers answer every lookup on port 53
+// themselves, whatever server Windows asks (prod, 23 Nov 2026), and then the
+// filter never sees a lookup. Encrypted DNS goes to Cloudflare on port 443,
+// which a router cannot answer in its place. No fallback to plain DNS: if the
+// encrypted lookup fails, Windows does not quietly go around the filter.
+var applyCommand = filterVars + `
+# Encrypted DNS (DNS over HTTPS) to Cloudflare's malware filter, never plain DNS
+foreach ($s in $servers) {
+  if (Get-DnsClientDohServerAddress -ServerAddress $s -ErrorAction SilentlyContinue) {
+    Set-DnsClientDohServerAddress -ServerAddress $s -DohTemplate $template -AllowFallbackToUdp $false -AutoUpgrade $true | Out-Null
+  } else {
+    Add-DnsClientDohServerAddress -ServerAddress $s -DohTemplate $template -AllowFallbackToUdp $false -AutoUpgrade $true | Out-Null
+  }
+}
+# The filter as the DNS of each Wi-Fi and Ethernet adapter, encrypted on each
+foreach ($a in ` + adapters + `) {
+  Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses $servers
+  $guid = "$($a.InterfaceGuid)"
+  foreach ($s in $servers) {
+    $key = ` + dohKey + `
+    New-Item -Path $key -Force | Out-Null
+    New-ItemProperty -Path $key -Name DohFlags -Value 1 -PropertyType QWord -Force | Out-Null
+  }
+}
 Clear-DnsClientCache`
 
-// Reads each adapter's own DNS servers from the registry. An empty value
-// means "automatic" (from the network), which Undo restores as automatic.
+// Reads, before the change, each adapter's own DNS servers and DNS over HTTPS
+// choices, and Windows' encrypted DNS list for the filter's servers. An
+// empty server value means "automatic" (from the network), restored as that.
 const backupScript = `$ErrorActionPreference = 'Stop'
+` + filterVars + `
 $rows = @()
 foreach ($a in ` + adapters + `) {
   $guid = "$($a.InterfaceGuid)"
   $v4 = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$guid" -Name NameServer -ErrorAction SilentlyContinue).NameServer
   $v6 = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\$guid" -Name NameServer -ErrorAction SilentlyContinue).NameServer
-  $rows += [pscustomobject]@{ guid = $guid; name = "$($a.Name)"; v4 = "$v4"; v6 = "$v6" }
+  $flags = @()
+  foreach ($s in $servers) {
+    $key = ` + dohKey + `
+    $f = (Get-ItemProperty -Path $key -Name DohFlags -ErrorAction SilentlyContinue).DohFlags
+    if ($null -ne $f) { $flags += [pscustomobject]@{ server = $s; flags = [int64]$f } }
+  }
+  $rows += [pscustomobject]@{ guid = $guid; name = "$($a.Name)"; v4 = "$v4"; v6 = "$v6"; doh = @($flags) }
 }
-ConvertTo-Json -InputObject @($rows) -Compress`
+$known = @()
+foreach ($s in $servers) {
+  $e = Get-DnsClientDohServerAddress -ServerAddress $s -ErrorAction SilentlyContinue
+  if ($e) { $known += [pscustomobject]@{ server = $s; template = "$($e.DohTemplate)"; fallback = [bool]$e.AllowFallbackToUdp; auto = [bool]$e.AutoUpgrade } }
+}
+ConvertTo-Json -Depth 5 -Compress -InputObject ([pscustomobject]@{ adapters = @($rows); doh = @($known) })`
 
-// Puts back the saved servers, found by adapter GUID (indexes change).
+// Puts back what was saved: each adapter's servers (found by GUID, indexes
+// change) and DNS over HTTPS choices, and Windows' encrypted DNS list. A
+// backup from 0.2.0 holds only the adapters' servers; 0.2.0 added no
+// encrypted DNS, so anything for the filter's servers is the agent's own.
 const restoreScript = `$ErrorActionPreference = 'Stop'
+` + filterVars + `
 $saved = $env:CA_BACKUP | ConvertFrom-Json
-foreach ($row in @($saved)) {
+if ($saved -is [array] -or $null -eq $saved.adapters) { $rows = @($saved); $known = @() } else { $rows = @($saved.adapters); $known = @($saved.doh) }
+foreach ($row in $rows) {
   $a = Get-NetAdapter | Where-Object { "$($_.InterfaceGuid)" -eq $row.guid }
   if (-not $a) { continue }
-  $servers = @(("$($row.v4) $($row.v6)" -split '[,\s]+') | Where-Object { $_ })
-  if ($servers.Count -gt 0) {
-    Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses $servers
+  $names = @(("$($row.v4) $($row.v6)" -split '[,\s]+') | Where-Object { $_ })
+  if ($names.Count -gt 0) {
+    Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses $names
   } else {
     Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ResetServerAddresses
+  }
+  $guid = "$($a.InterfaceGuid)"
+  foreach ($s in $servers) {
+    $key = ` + dohKey + `
+    $before = @($row.doh) | Where-Object { $_ -and $_.server -eq $s } | Select-Object -First 1
+    if ($before) {
+      New-Item -Path $key -Force | Out-Null
+      New-ItemProperty -Path $key -Name DohFlags -Value ([int64]$before.flags) -PropertyType QWord -Force | Out-Null
+    } elseif (Test-Path $key) {
+      Remove-Item -Path $key -Recurse -Force
+    }
+  }
+}
+foreach ($s in $servers) {
+  $before = @($known) | Where-Object { $_ -and $_.server -eq $s } | Select-Object -First 1
+  if ($before) {
+    Set-DnsClientDohServerAddress -ServerAddress $s -DohTemplate $before.template -AllowFallbackToUdp ([bool]$before.fallback) -AutoUpgrade ([bool]$before.auto) | Out-Null
+  } elseif (Get-DnsClientDohServerAddress -ServerAddress $s -ErrorAction SilentlyContinue) {
+    Remove-DnsClientDohServerAddress -ServerAddress $s -Confirm:$false
   }
 }
 Clear-DnsClientCache`
@@ -52,6 +121,8 @@ Clear-DnsClientCache`
 const undoCommand = `# For each adapter changed: the DNS servers it had before, or automatic
 Set-DnsClientServerAddress -InterfaceIndex <adapter> -ServerAddresses <saved servers>
 Set-DnsClientServerAddress -InterfaceIndex <adapter> -ResetServerAddresses
+# Encrypted DNS: the choices saved before, or removed if there were none
+Remove-DnsClientDohServerAddress -ServerAddress <filter server>
 Clear-DnsClientCache`
 
 func planOS() Plan {
@@ -90,7 +161,7 @@ func currentServers() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !strings.HasPrefix(out, "[") {
+	if !strings.HasPrefix(out, "{") {
 		return nil, errors.New("Windows returned an unreadable list of network adapters")
 	}
 	return []byte(out), nil
