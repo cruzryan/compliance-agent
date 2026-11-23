@@ -926,10 +926,35 @@ footer {
   color: var(--ce-ink);
   font: 600 13px/1.3 var(--ce-font);
 }
+/* The web filtering dialog holds a long command: its body scrolls inside the
+   card, so the command never spills over the buttons (prod, 23 Nov 2026: the
+   0.2.1 command overflowed the card at the window's real size). */
+.modal-body.webfilter-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-right: -10px;
+  padding-right: 10px;
+}
+.webfilter-toggle {
+  margin-top: 2px;
+  font-size: 13px;
+}
+.webfilter-details {
+  margin-top: 10px;
+}
+.webfilter-details-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
 .webfilter-command {
+  max-height: 210px;
   margin: 0;
   padding: 12px 14px;
-  overflow-x: auto;
+  overflow: auto;
   border-radius: 8px;
   background: #0b1430;
   color: #dfe6ff;

@@ -159,6 +159,55 @@ jobs:
           $diff = Compare-Object (Get-Content before.json) (Get-Content after.json)
           if ($diff) { $diff | Format-Table -AutoSize; throw "undo did not put the machine back as it was" }
           "undo restored the DNS servers and the encrypted DNS list exactly"
+  # The agent must never sit in the tray with a window that never opened
+  # (Cuau's laptop, 22 Nov 2026: WebView2 failed at sign-in, 29 h tray-only).
+  # Runs the real app on Windows twice: once with the first window's "loaded"
+  # signal ignored (a new window must load), once with WebView2 really broken
+  # (the person must be told; the failure must be in agent.log).
+  window-recovery-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
+      - name: Build the collector and the app (development build, real page)
+        shell: pwsh
+        run: |
+          go build -o bin/device-checker-windows-amd64.exe ./cmd/device-checker
+          Set-Location desktop
+          npm ci
+          npx tauri build --debug --no-bundle
+      - name: A window that never says it loaded is replaced
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:APPDATA 'ComplianceEverywhere\ComplianceAgent\agent.log'
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $env:CA_TEST_FAST_WINDOW = '1'; $env:CA_TEST_IGNORE_READY = '1'
+          $p = Start-Process desktop\src-tauri\target\debug\compliance-agent.exe -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 60 -and -not $ok; $i++) { Start-Sleep 2; $ok = (Test-Path $log) -and (Select-String -Path $log -SimpleMatch 'window main-2 recovered' -Quiet) }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-Content $log -ErrorAction SilentlyContinue
+          if (-not $ok) { throw 'the replacement window never loaded' }
+      - name: A WebView2 that can't start is reported, never silent
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:APPDATA 'ComplianceEverywhere\ComplianceAgent\agent.log'
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $env:CA_TEST_FAST_WINDOW = '1'
+          $env:WEBVIEW2_BROWSER_EXECUTABLE_FOLDER = 'C:\no-webview2-here'
+          $p = Start-Process desktop\src-tauri\target\debug\compliance-agent.exe -PassThru
+          $told = $false
+          for ($i = 0; $i -lt 60 -and -not $told; $i++) { Start-Sleep 2; $told = (Test-Path $log) -and (Select-String -Path $log -SimpleMatch 'no window could be opened; telling the person' -Quiet) }
+          $alive = -not $p.HasExited
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-Content $log -ErrorAction SilentlyContinue
+          if (-not $told) { throw 'a broken WebView2 left the agent silent' }
+          if (-not $alive) { throw 'the agent quit instead of carrying on with its checks' }
+          if (-not (Select-String -Path $log -SimpleMatch 'ERROR tauri_runtime_wry' -Quiet)) { throw 'the WebView2 error itself is not in agent.log' }
   race:
     runs-on: ubuntu-latest
     steps:

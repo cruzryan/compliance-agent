@@ -16,6 +16,11 @@ import {
 } from "./copy.js";
 import { parseReleaseNotes } from "./notes.js";
 
+// Tell the background process this page loaded, before anything else can
+// fail. If it never hears this, it treats the window as broken (WebView2 did
+// not start) and builds a new one, then tells the person (window_health.rs).
+invoke("window_ready").catch((error) => console.error("Compliance Agent could not say the window loaded", error));
+
 // Fixed first-party documentation only. A checker report never provides a URL.
 const remediation = {
   windows: {
@@ -462,8 +467,8 @@ function renderWebFilter() {
       lines.push(el("li", {
         className: "line info",
         text: SYSTEM_NAME === "Windows"
-          ? "Turning it on here uses encrypted DNS, which your network can't answer in Cloudflare's place."
-          : "On this network, changing the DNS servers is not enough: turn on encrypted DNS (DNS over HTTPS) to Cloudflare's 1.1.1.2 filter, or ask whoever runs your network to stop redirecting DNS."
+          ? "Turning it on here works on your network too."
+          : "On this network, the button alone may not be enough. Ask whoever runs your network or your IT to help turn it on."
       }));
     }
   }
@@ -516,7 +521,7 @@ async function openWebFilterDialog() {
   const plan = await loadWebFilterPlan();
   const why = el("div", { className: "webfilter-why" }, [
     el("strong", { text: "What web filtering is, and why" }),
-    el("span", { text: "Every time you open a website, your computer first asks a lookup service (DNS) where that site lives. A filtering DNS refuses to answer for sites known to spread malware or phishing, so a bad link does not open. Your company runs ISO 27001, which asks for this on every work computer (control A.8.23, web filtering)." })
+    el("span", { text: "Web filtering stops this computer from opening websites known to spread malware or phishing, so a bad link does not open. Your company runs ISO 27001, which asks for it on every work computer." })
   ]);
   if (!plan || !plan.supported) {
     const steps = Array.isArray(plan?.steps) ? plan.steps : [];
@@ -524,7 +529,7 @@ async function openWebFilterDialog() {
       title: "Turn on web filtering",
       nodes: [
         why,
-        el("p", { text: "Compliance Agent can't change the DNS on this computer, so here is how to do it yourself. The check sees the change on its own." }),
+        el("p", { text: "Compliance Agent can't turn it on by itself on this computer, so here is how to do it. The check sees the change on its own." }),
         el("ol", {}, steps.map((step) => el("li", { text: clean(step, 200) })))
       ],
       actions: [actionButton("Close", () => closeModal(dialog), "check-action")]
@@ -535,33 +540,38 @@ async function openWebFilterDialog() {
   // characters go.
   // eslint-disable-next-line no-control-regex
   const command = (plan.commands || []).flatMap((block) => String(block).split("\n")).map((line) => line.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 300)).join("\n");
+  // Plain words only. The exact command stays one press away for anyone who
+  // wants to read it, closed by default (Ryan, 23 Nov 2026: "we should never
+  // show technical stuff there, just the button to turn it on").
   const status = el("span", { className: "modal-status", attrs: { role: "status" } });
-  const note = plan.prompt === "none"
-    ? "Compliance Agent already runs with administrator rights on this computer, so the change happens as soon as you press Run it for me. Rather do it yourself? Copy the command and run it in PowerShell as administrator; the check sees it either way."
-    : `Next, ${SYSTEM_NAME} asks for your password. Rather do it yourself? Copy the commands and run them as an administrator; the check sees it either way.`;
+  const details = el("div", { className: "webfilter-details", attrs: { id: "webFilterDetails", hidden: "" } }, [
+    el("pre", { className: "webfilter-command", text: command }),
+    el("div", { className: "webfilter-details-actions" }, [status, actionButton("Copy command", () => copyText(command, status))])
+  ]);
+  const toggle = actionButton("Show the exact command", () => {
+    const open = details.hidden;
+    details.hidden = !open;
+    toggle.textContent = open ? "Hide the exact command" : "Show the exact command";
+    toggle.setAttribute("aria-expanded", String(open));
+  }, "secondary-action webfilter-toggle");
+  toggle.setAttribute("aria-controls", "webFilterDetails");
+  toggle.setAttribute("aria-expanded", "false");
   webFilterDialogState({
     title: "Turn on web filtering?",
     nodes: [
       why,
-      el("p", { text: "Compliance Agent can turn it on for you. It changes your DNS settings and nothing else." }),
       el("ul", {}, [
-        el("li", {
-          text: plan.method === "windows-dns"
-            ? `Sets the DNS of ${clean(plan.applies, 120) || "your network"} to Cloudflare's malware filter, encrypted (DNS over HTTPS), so your router can't answer in its place.`
-            : `Sets the DNS of ${clean(plan.applies, 120) || "your network"} to Cloudflare's malware filter.`
-        }),
-        el("li", { text: "Saves your current DNS first, so Undo puts it back exactly." }),
-        el("li", { text: plan.method === "linux-networkmanager" ? "Your network reconnects for a second. No restart." : "Works right away. No restart." })
-      ]),
-      el("h3", { text: "The exact command it runs" }),
-      el("pre", { className: "webfilter-command", text: command }),
-      el("p", { className: "webfilter-note", text: note })
+        el("li", { text: `Blocks websites known to spread malware or phishing, on ${clean(plan.applies, 120) || "this computer"}.` }),
+        el("li", { text: plan.method === "linux-networkmanager" ? "Your network reconnects for a second. No restart." : "Works right away. No restart." }),
+        el("li", { text: "Undo puts your previous settings back exactly." }),
+        plan.prompt === "none" ? null : el("li", { text: `${SYSTEM_NAME} asks for your password first.` })
+      ].filter(Boolean)),
+      toggle,
+      details
     ],
     actions: [
-      status,
-      actionButton("Copy command", () => copyText(command, status)),
       actionButton("Cancel", () => closeModal(dialog)),
-      actionButton("Run it for me", () => setWebFilter(true), "check-action")
+      actionButton("Turn on web filtering", () => setWebFilter(true), "check-action")
     ]
   });
 }
@@ -572,7 +582,7 @@ function openWebFilterUndo() {
   webFilterDialogState({
     title: "Undo web filtering?",
     nodes: [
-      el("p", { text: `This puts back the DNS servers ${applies} had before Compliance Agent turned on web filtering.` }),
+      el("p", { text: `This puts back the settings ${applies} had before Compliance Agent turned on web filtering.` }),
       el("p", { text: "Your company's ISO 27001 asks for web filtering on every work computer, so this laptop will show it as off." })
     ],
     actions: [
@@ -602,8 +612,8 @@ async function setWebFilter(on) {
       webFilterDialogState({
         title: "The setting changed, but the test site still opens",
         nodes: [
-          el("p", { text: clean(result.status.detail, 200) || "This computer's DNS still gives an address for a known malware test site." }),
-          el("p", { text: "Press Check again in a minute: some networks take a moment. If it stays off, your network is going around the filter. Undo puts your previous DNS back." })
+          el("p", { text: clean(result.status.detail, 200) || "Malware and phishing sites can still open on this computer." }),
+          el("p", { text: "Press Check again in a minute: some networks take a moment. If it stays off, your network is going around the filter. Undo puts your previous settings back." })
         ],
         actions: [actionButton("Close", () => closeModal(dialog), "check-action")]
       });

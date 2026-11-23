@@ -75,7 +75,7 @@ var filterLookupFn = func(ctx context.Context, host string) ([]net.IPAddr, error
 }
 
 // RedirectedDetail is what the window says when the network redirects DNS.
-const RedirectedDetail = "A known malware test site still opens: your network answers DNS lookups itself, so the filter never sees them."
+const RedirectedDetail = "Malware and phishing sites can still open: your network goes around the filter."
 
 // Check asks this computer's DNS for the test domain. When it is not
 // filtered, it also asks the filter directly, to tell "no filter set" from
@@ -116,19 +116,19 @@ func classify(addrs []net.IPAddr, err error) Status {
 	if err != nil {
 		var dnsErr *net.DNSError
 		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
-			return Status{State: StateOn, Detail: "A known malware test site is blocked: this computer's DNS refuses to answer for it."}
+			return Status{State: StateOn, Detail: "Malware and phishing sites are blocked on this computer."}
 		}
-		return Status{State: StateUnknown, Detail: "We couldn't reach this computer's DNS to check. We'll check again later."}
+		return Status{State: StateUnknown, Detail: "We couldn't check web filtering right now. We'll check again later."}
 	}
 	if len(addrs) == 0 {
-		return Status{State: StateOn, Detail: "A known malware test site is blocked: this computer's DNS gives no address for it."}
+		return Status{State: StateOn, Detail: "Malware and phishing sites are blocked on this computer."}
 	}
 	for _, addr := range addrs {
 		if !addr.IP.IsUnspecified() {
-			return Status{State: StateOff, Detail: "A known malware test site still opens: this computer's DNS does not filter malware sites."}
+			return Status{State: StateOff, Detail: "Malware and phishing sites can still open on this computer."}
 		}
 	}
-	return Status{State: StateOn, Detail: "A known malware test site is blocked by this computer's DNS."}
+	return Status{State: StateOn, Detail: "Malware and phishing sites are blocked on this computer."}
 }
 
 // Plan says how this computer would be changed, in the exact commands the
