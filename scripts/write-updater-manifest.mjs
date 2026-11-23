@@ -1,5 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { notesForManifest, parseReleaseNotesFile } from "../desktop/src/notes.js";
 
 const [releaseRoot] = process.argv.slice(2);
 const tag = process.env.GITHUB_REF_NAME;
@@ -26,9 +28,18 @@ for (const [target, [directory, filename]] of Object.entries(assets)) {
   };
 }
 
+// The notes were checked before anything was built (check-release-notes.mjs);
+// read them again here and refuse to publish if they no longer match.
+const version = tag.slice("desktop-v".length);
+const notesFile = join(dirname(fileURLToPath(import.meta.url)), "..", "desktop", "RELEASE_NOTES.md");
+const release = parseReleaseNotesFile(await readFile(notesFile, "utf8"));
+if (release.errors.length || release.version !== version) {
+  throw new Error(`desktop/RELEASE_NOTES.md is not ready for ${version}: ${release.errors.join(" ") || `it is written for ${release.version}`}`);
+}
+
 await writeFile(join(releaseRoot, "latest.json"), `${JSON.stringify({
-  version: tag.slice("desktop-v".length),
-  notes: "Signed Compliance Agent update.",
+  version,
+  notes: notesForManifest(release.notes),
   pub_date: new Date().toISOString(),
   platforms,
 }, null, 2)}\n`);

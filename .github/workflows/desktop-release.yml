@@ -13,7 +13,21 @@ permissions:
   id-token: write
 
 jobs:
+  # Runs first: a release without new, well-formed notes for exactly this
+  # version stops here, before anything is built, so no agent ever gets it.
+  # The reason is in the run summary. See desktop/RELEASE_NOTES.md.
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Require release notes for this version
+        run: node scripts/check-release-notes.mjs --tag "$GITHUB_REF_NAME"
+
   windows:
+    needs: notes
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +83,7 @@ jobs:
   # One universal app for Apple silicon and Intel Macs. The collector is built
   # for both architectures and merged with lipo; Tauri builds a universal .app.
   macos:
+    needs: notes
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -123,6 +138,7 @@ jobs:
         with: { name: desktop-macos, path: dist/, if-no-files-found: error }
 
   debian:
+    needs: notes
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
