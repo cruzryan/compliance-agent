@@ -456,6 +456,16 @@ function renderWebFilter() {
   const lines = [el("li", { className: `line ${tone === "pass" ? "ok" : tone === "fail" ? "fail" : "warn"}`, text: detail })];
   if (state === "off") {
     lines.push(el("li", { className: "line info", text: "Web filtering stops this computer from opening sites known to spread malware or phishing. Your company's ISO 27001 asks for it on every work computer." }));
+    // The router answers DNS itself (prod, 23 Nov 2026). Windows' button turns
+    // on encrypted DNS, which goes around that; elsewhere, say what it takes.
+    if (comingUpData.web_filtering.status?.redirected) {
+      lines.push(el("li", {
+        className: "line info",
+        text: SYSTEM_NAME === "Windows"
+          ? "Turning it on here uses encrypted DNS, which your network can't answer in Cloudflare's place."
+          : "On this network, changing the DNS servers is not enough: turn on encrypted DNS (DNS over HTTPS) to Cloudflare's 1.1.1.2 filter, or ask whoever runs your network to stop redirecting DNS."
+      }));
+    }
   }
   if (state === "on" && webFilterPlan?.turned_on_by_agent && webFilterPlan.turned_on_at) {
     lines.push(el("li", { className: "line info", text: `Turned on by you with Compliance Agent, ${friendlyTime(new Date(webFilterPlan.turned_on_at))}.` }));
@@ -533,9 +543,13 @@ async function openWebFilterDialog() {
     title: "Turn on web filtering?",
     nodes: [
       why,
-      el("p", { text: "Compliance Agent can turn it on for you. It changes one setting and nothing else." }),
+      el("p", { text: "Compliance Agent can turn it on for you. It changes your DNS settings and nothing else." }),
       el("ul", {}, [
-        el("li", { text: `Sets the DNS of ${clean(plan.applies, 120) || "your network"} to Cloudflare's malware filter.` }),
+        el("li", {
+          text: plan.method === "windows-dns"
+            ? `Sets the DNS of ${clean(plan.applies, 120) || "your network"} to Cloudflare's malware filter, encrypted (DNS over HTTPS), so your router can't answer in its place.`
+            : `Sets the DNS of ${clean(plan.applies, 120) || "your network"} to Cloudflare's malware filter.`
+        }),
         el("li", { text: "Saves your current DNS first, so Undo puts it back exactly." }),
         el("li", { text: plan.method === "linux-networkmanager" ? "Your network reconnects for a second. No restart." : "Works right away. No restart." })
       ]),
@@ -581,8 +595,21 @@ async function setWebFilter(on) {
     if (result?.plan) webFilterPlan = result.plan;
     if (comingUpData?.web_filtering && result?.status) comingUpData.web_filtering.status = result.status;
     dialog.dataset.locked = "false";
-    closeModal(dialog);
     refreshWebFilterView();
+    // The change went through but the test site still opens: say so here,
+    // never close as if it worked.
+    if (on && result?.status && result.status.state !== "on") {
+      webFilterDialogState({
+        title: "The setting changed, but the test site still opens",
+        nodes: [
+          el("p", { text: clean(result.status.detail, 200) || "This computer's DNS still gives an address for a known malware test site." }),
+          el("p", { text: "Press Check again in a minute: some networks take a moment. If it stays off, your network is going around the filter. Undo puts your previous DNS back." })
+        ],
+        actions: [actionButton("Close", () => closeModal(dialog), "check-action")]
+      });
+      return;
+    }
+    closeModal(dialog);
   } catch (error) {
     console.error("Compliance Agent could not change web filtering", error);
     webFilterDialogState({

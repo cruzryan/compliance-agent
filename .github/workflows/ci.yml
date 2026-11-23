@@ -81,6 +81,84 @@ jobs:
       - name: Compile the desktop app
         working-directory: desktop/src-tauri
         run: cargo check
+  # Presses "Turn on web filtering" for real on a throwaway Windows machine:
+  # turns it on, blocks plain DNS (port 53, the way a redirecting router
+  # takes it over), checks the malware test site is still blocked through
+  # encrypted DNS, then undoes it and checks the machine is exactly as before.
+  webfilter-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - name: Build the collector
+        run: go build -o dc.exe ./cmd/device-checker
+      - name: What the machine has before
+        shell: pwsh
+        run: |
+          Get-NetAdapter | Format-Table Name, Status, HardwareInterface, InterfaceDescription -AutoSize
+          $before = [pscustomobject]@{
+            servers = @(Get-DnsClientServerAddress | Sort-Object InterfaceIndex, AddressFamily | ForEach-Object { "$($_.InterfaceAlias)|$($_.AddressFamily)|$($_.ServerAddresses -join ',')" })
+            doh = @(Get-DnsClientDohServerAddress | Sort-Object ServerAddress | ForEach-Object { "$($_.ServerAddress)|$($_.DohTemplate)|$($_.AllowFallbackToUdp)|$($_.AutoUpgrade)" })
+          }
+          $before | ConvertTo-Json -Depth 3 | Set-Content before.json
+          Get-Content before.json
+          $s = .\dc.exe webfilter status | ConvertFrom-Json
+          "before: $($s.state) redirected=$($s.redirected)"
+          if ($s.state -ne 'off') { throw "expected an unfiltered runner, got $($s.state)" }
+          if ($s.redirected) { throw "the runner's DNS is not redirected; the probe said it was" }
+      - name: Turn on web filtering
+        shell: pwsh
+        run: |
+          $out = .\dc.exe webfilter on
+          $r = $out | ConvertFrom-Json
+          "on: ok=$($r.ok) state=$($r.status.state) detail=$($r.status.detail)"
+          if ($r.status.state -ne 'on') {
+            "== diagnostics"
+            Get-DnsClientServerAddress | Format-Table InterfaceAlias, AddressFamily, ServerAddresses -AutoSize
+            Get-DnsClientDohServerAddress -ServerAddress 1.1.1.2, 1.0.0.2 | Format-Table -AutoSize
+            Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters" -Recurse -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) $((Get-ItemProperty $_.PSPath).DohFlags)" }
+            foreach ($n in 'malware.testcategory.com', 'example.com') { try { "$n -> " + ((Resolve-DnsName $n -Type A -ErrorAction Stop | Where-Object IPAddress).IPAddress -join ',') } catch { "$n -> $($_.Exception.Message)" } }
+            try { "direct 1.1.1.2 -> " + ((Resolve-DnsName malware.testcategory.com -Server 1.1.1.2 -DnsOnly -ErrorAction Stop | Where-Object IPAddress).IPAddress -join ',') } catch { "direct -> $($_.Exception.Message)" }
+            try { "https to 1.1.1.2:443 -> " + (Test-NetConnection 1.1.1.2 -Port 443).TcpTestSucceeded } catch {}
+          }
+          if (-not $r.ok -or $r.status.state -ne 'on') { throw "web filtering did not turn on: $($r.status.state)" }
+          Get-DnsClientDohServerAddress -ServerAddress 1.1.1.2, 1.0.0.2 | Format-Table -AutoSize
+          foreach ($e in Get-DnsClientDohServerAddress -ServerAddress 1.1.1.2, 1.0.0.2) {
+            if ($e.AllowFallbackToUdp) { throw "$($e.ServerAddress) still falls back to plain DNS" }
+          }
+      - name: Still blocked with plain DNS blocked (encrypted DNS only)
+        shell: pwsh
+        run: |
+          Set-NetFirewallProfile -All -Enabled True
+          New-NetFirewallRule -DisplayName ca-block-dns-udp -Direction Outbound -Protocol UDP -RemotePort 53 -Action Block | Out-Null
+          New-NetFirewallRule -DisplayName ca-block-dns-tcp -Direction Outbound -Protocol TCP -RemotePort 53 -Action Block | Out-Null
+          Clear-DnsClientCache
+          $s = .\dc.exe webfilter status | ConvertFrom-Json
+          "with port 53 blocked: $($s.state)"
+          if ($s.state -ne 'on') { throw "the test site was not blocked through encrypted DNS: $($s.state) $($s.detail)" }
+          $ok = Resolve-DnsName example.com -Type A -ErrorAction Stop
+          "example.com still resolves: $($ok.IPAddress -join ',')"
+      - name: Unblock plain DNS
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-NetFirewallRule -DisplayName ca-block-dns-udp -ErrorAction SilentlyContinue
+          Remove-NetFirewallRule -DisplayName ca-block-dns-tcp -ErrorAction SilentlyContinue
+      - name: Undo puts everything back
+        shell: pwsh
+        run: |
+          $r = .\dc.exe webfilter off | ConvertFrom-Json
+          if (-not $r.ok) { throw "undo failed" }
+          $after = [pscustomobject]@{
+            servers = @(Get-DnsClientServerAddress | Sort-Object InterfaceIndex, AddressFamily | ForEach-Object { "$($_.InterfaceAlias)|$($_.AddressFamily)|$($_.ServerAddresses -join ',')" })
+            doh = @(Get-DnsClientDohServerAddress | Sort-Object ServerAddress | ForEach-Object { "$($_.ServerAddress)|$($_.DohTemplate)|$($_.AllowFallbackToUdp)|$($_.AutoUpgrade)" })
+          }
+          $after | ConvertTo-Json -Depth 3 | Set-Content after.json
+          $diff = Compare-Object (Get-Content before.json) (Get-Content after.json)
+          if ($diff) { $diff | Format-Table -AutoSize; throw "undo did not put the machine back as it was" }
+          "undo restored the DNS servers and the encrypted DNS list exactly"
   race:
     runs-on: ubuntu-latest
     steps:
